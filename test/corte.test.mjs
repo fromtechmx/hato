@@ -126,3 +126,10 @@ test('acumuladoCiclo: lo repuesto de una compra anterior (origen_solicitud_id) n
   ];
   assert.equal(acumuladoCiclo(sol, ahora, 3, '18:00').get('a'), 5);
 });
+
+test('fechaEntregaVet: 3 días después de la orden, cruzando mes y año', async () => {
+  const { fechaEntregaVet } = await import('../lib.js');
+  assert.equal(fechaEntregaVet(new Date(2026, 10, 18, 22, 30).toISOString()), '2026-11-21');
+  assert.equal(fechaEntregaVet(new Date(2026, 11, 30, 9, 0).toISOString()), '2027-01-02');
+  assert.equal(fechaEntregaVet('basura'), null);
+});

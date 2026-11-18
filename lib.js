@@ -485,3 +485,14 @@ export function agruparTodas(animales, eventos, hoy, P = PARAMS) {
     return { ...g, codigo: codigos[0], vacas: filas.filter((f) => codigos.includes(f.est.codigo)).sort(orden) };
   }).filter((g) => g.vacas.length);
 }
+
+
+// Compras dirigidas al veterinario: entrega estimada = fecha de la orden + 3 días (regla provisional, sin validar con el MVZ).
+export const DIAS_ENTREGA_VET = 3;
+export function fechaEntregaVet(creadaEn, dias = DIAS_ENTREGA_VET) {
+  const d = new Date(creadaEn);
+  if (Number.isNaN(d.getTime())) return null;
+  const f = new Date(d.getFullYear(), d.getMonth(), d.getDate() + dias);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${f.getFullYear()}-${p(f.getMonth() + 1)}-${p(f.getDate())}`;
+}

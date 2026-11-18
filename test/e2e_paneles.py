@@ -241,6 +241,7 @@ try:
         # ---- lo que faltó por llegar: nueva compra que procede de esta ----
         main = page.inner_text('main')
         check('Falta por llegar' in main and 'Pajillas de semen: 17 pajilla' in main, 'avisa que faltaron 17 pajillas (77 pedidas, 60 llegaron)')
+        check('Entrega estimada:' in page.inner_text('.ev:has-text("CC-2026-0001")') and '3 días después de la orden' in page.inner_text('.ev:has-text("CC-2026-0001")'), 'la compra al veterinario muestra entrega estimada a 3 días de la orden')
         page.click('button:has-text("Generar compra con lo pendiente")')
         page.wait_for_selector('.ev:has-text("CC-2026-0002")')
         sv = servidor()

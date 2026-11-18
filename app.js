@@ -1,6 +1,6 @@
 // HATO · app. Pantallas y flujo. Todo se guarda primero en el teléfono; se envía cuando hay conexión.
 
-import { PARAMS, TIPOS, textoTipo, uuid, hoyLocal, sumarDias, fechaCorta, normArete, validarEvento, eventosVigentes, estadoVaca, tipoSugerido, ordenarTipos, UMBRALES, resumenRancho, recomendarVisita, agruparSolicitudes, validarSolicitud, repartir, lineasDeEntrega, clasificarHato, agruparTodas, cortesAlrededor, acumuladoCiclo, textoFalta, textoCorte, resumenCorte, necesidadSemana, DIAS_SEMANA } from './lib.js';
+import { PARAMS, TIPOS, textoTipo, uuid, hoyLocal, sumarDias, fechaCorta, normArete, validarEvento, eventosVigentes, estadoVaca, tipoSugerido, ordenarTipos, UMBRALES, resumenRancho, recomendarVisita, agruparSolicitudes, validarSolicitud, repartir, lineasDeEntrega, clasificarHato, agruparTodas, cortesAlrededor, acumuladoCiclo, textoFalta, textoCorte, resumenCorte, necesidadSemana, DIAS_SEMANA, fechaEntregaVet, DIAS_ENTREGA_VET } from './lib.js';
 import { openIdbStore } from './store.js';
 import { createApi } from './api.js';
 import { createSync } from './sync.js';
@@ -832,6 +832,12 @@ function textoReparto(ordenId, valores) {
   }).join('<br>');
 }
 
+function lineaEntregaVet(o) {
+  if (o.destinatario_tipo !== 'veterinario') return '';
+  const f = fechaEntregaVet(o.creada_en);
+  return f ? `Entrega estimada: ${fechaCorta(f)} (${DIAS_ENTREGA_VET} días después de la orden)` : '';
+}
+
 function tarjetaOrden(o) {
   const A = S.asoc;
   const [cls, txt] = ESTADOS_ORDEN[o.estado] || ['gris', o.estado];
@@ -891,6 +897,7 @@ function tarjetaOrden(o) {
   return `<div class="ev"><div class="fila"><b>${esc(o.codigo || '')}</b><span class="estado ${cls}">${esc(txt)}</span></div>
     <span>${esc(TIPOS_DEST[o.destinatario_tipo] || '')}: ${esc(o.destinatario)}</span><br>
     <span class="suave">${esc(fechaCorta(String(o.creada_en).slice(0, 10)))}${o.nota ? ` · ${esc(o.nota)}` : ''}</span>
+    ${lineaEntregaVet(o) ? `<div style="margin-top:4px"><b>${esc(lineaEntregaVet(o))}</b></div>` : ''}
     <div>${items.map((i) => `${esc(i.nombre)}: ${esc(i.total)} ${esc(i.unidad)}`).join('<br>')}</div>
     <div style="margin-top:6px"><button class="btn chico" data-accion="orden-copiar" data-id="${esc(o.id)}">Copiar texto</button>${accion}</div>
     ${origen}${recepcion}${reparto}${pendiente}</div>`;
@@ -1005,7 +1012,7 @@ async function copiarOrden(id) {
   const lineas = itemsDeOrden(id).map((i) => `- ${i.nombre}: ${i.total} ${i.unidad}`);
   const ents = entregasDeOrden(id).map((e) => `${e.codigo} · ${nombreRancho(e.rancho_id)}: ${lineasDeEntrega(S.asoc.solicitudes, S.asoc.insumos, id, e.rancho_id).map((l) => `${l.nombre} ${l.asignada ?? l.pedida} ${l.unidad}`).join(', ')}`);
   const procede = o.origen_orden_id ? `\nProcede de ${(S.asoc.ordenes.find((q) => q.id === o.origen_orden_id) || {}).codigo || 'otra compra'} (lo que faltó por llegar)` : '';
-  const texto = `Compra consolidada ${o.codigo || ''} · ${S.asoc.coop ? S.asoc.coop.nombre : ''}${procede}\nPara: ${o.destinatario}\n${lineas.join('\n')}${ents.length ? `\nReparto:\n${ents.join('\n')}` : ''}${o.nota ? `\nNota: ${o.nota}` : ''}`;
+  const texto = `Compra consolidada ${o.codigo || ''} · ${S.asoc.coop ? S.asoc.coop.nombre : ''}${procede}\nPara: ${o.destinatario}${lineaEntregaVet(o) ? `\n${lineaEntregaVet(o)}` : ''}\n${lineas.join('\n')}${ents.length ? `\nReparto:\n${ents.join('\n')}` : ''}${o.nota ? `\nNota: ${o.nota}` : ''}`;
   try { await navigator.clipboard.writeText(texto); toast('Texto copiado'); } catch { window.prompt('Copia este texto:', texto); }
 }
 
