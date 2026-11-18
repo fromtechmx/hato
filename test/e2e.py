@@ -70,7 +70,7 @@ try:
         page.wait_for_selector('text=Guardado en el teléfono')
         check('por enviar' in page.inner_text('#chip'), 'sin conexión: el indicador dice "por enviar"')
         page.fill('#arete', '202')
-        page.click('.vaca >> nth=0')
+        page.click('.cuadro >> nth=0')
         page.click('text=Celo')
         page.click('text=Guardar')
         page.wait_for_selector('text=Guardado en el teléfono')

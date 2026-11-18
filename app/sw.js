@@ -1,6 +1,6 @@
 // HATO · service worker: guarda la app en el teléfono para abrirla sin conexión.
 // Nunca guarda respuestas de Supabase (datos ni sesión): solo los archivos de la propia app.
-const VERSION = 'hato-v3';
+const VERSION = 'hato-v4';
 const ARCHIVOS = [
   './', 'index.html', 'app.js', 'lib.js', 'store.js', 'api.js', 'sync.js', 'config.js',
   'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png',

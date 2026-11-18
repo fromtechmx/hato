@@ -32,6 +32,9 @@ function vaca(r, rec, evs) {
 }
 vaca(rGan, 0, [['parto', 70], ['celo', 3]]); vaca(rGan, 0, [['parto', 90], ['celo', 2]]); vaca(rGan, 0, [['inseminacion', 24]]);
 const gest = [['inseminacion', 100], ['diagnostico', 60, { resultado: 'prenada' }]];
+// rancho del ganadero con 60 vacas en total: aretes 1..57 gestantes (sin alertas) + las 3 de arriba
+const aretesNum = Array.from({ length: 57 }, (_, i) => String(i + 1)).sort(() => 0.5 - Math.random());
+for (const ar of aretesNum) { vaca(rGan, 0, gest); mock.animales[mock.animales.length - 1].arete = ar; }
 for (let i = 0; i < 6; i++) vaca(rVisita, 0, [['inseminacion', 40]]);
 vaca(rLlamar, 0, [['parto', 70], ['celo', 3]]);
 for (let i = 0; i < 3; i++) vaca(rLlamar, 0, gest);

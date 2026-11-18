@@ -107,3 +107,9 @@ Se ajustan en `UMBRALES` y `PARAMS` de `lib.js`.
   - Por servir: vacas en celo, abiertas, listas, o posparto que estarán listas en ≤ 7 días (cota superior: no todas se servirán).
   - Por diagnosticar: vacas que ya tocan diagnóstico o lo cumplirán en ≤ 7 días.
 - **Límites**: los factores NO están validados (los fija el MVZ/cooperativa; por defecto 0 = no sugiere). Solo cubre insumos ligados a eventos reproductivos. Si el rancho no registra, la estimación sale baja (la app lo avisa si el último dato tiene más de 14 días). Un solo corte para toda la cooperativa. Sin aviso por WhatsApp (depende del canal).
+
+## Selección en cuadros (teléfono)
+
+- **¿Qué vaca?** (registrar evento): cuadros de 3 columnas (4 en pantalla ancha) con el arete grande y el estado en una palabra; las que requieren atención van con borde naranja. Orden por número (numérico: 9 antes que 10) o "Atención primero" (aparece con más de 6 vacas). Escribir en el buscador filtra los cuadros; si no existe el arete, ofrece crear vaca nueva.
+- **Pedir insumos**: el insumo se elige tocando un cuadro (ya no es un menú desplegable).
+- Pendiente: "Mis vacas" y "Por atender" siguen siendo lista con detalle, no cuadros.

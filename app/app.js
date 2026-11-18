@@ -33,6 +33,7 @@ const S = {
   admin: [],
   panel: [],
   ped: null,
+  ordenVacas: 'numero',
   asoc: null,
 };
 
@@ -344,7 +345,7 @@ function render() {
   if (S.cargando) { $app.innerHTML = `${cabecera()}<main><p class="suave">Descargando tus datos…</p></main>`; return; }
   if (S.vista === 'registro' && S.reg) capturarCampos();
   if (S.vista === 'asoc') capturarFormAsoc();
-  if (S.vista === 'insumos' && S.ped && document.getElementById('insumo')) S.ped.form = { insumo_id: document.getElementById('insumo').value, cantidad: document.getElementById('cantidad').value, nota: document.getElementById('nota').value };
+  if (S.vista === 'insumos' && S.ped && document.getElementById('cantidad')) S.ped.form = { insumo_id: S.ped.form.insumo_id, cantidad: document.getElementById('cantidad').value, nota: document.getElementById('nota').value };
   let html;
   switch (S.vista) {
     case 'vacas': html = vistaVacas(); break;
@@ -387,21 +388,28 @@ function capturarCampos() {
   }
 }
 
+const ETIQUETA_CORTA = { sin_datos: 'Sin datos', diagnosticar: 'Diagnóstico', servida: 'Servida', gestante: 'Gestante', parto_proximo: 'Parto próximo', celo: 'En celo', abierta: 'Vacía', lista: 'Lista', posparto: 'Posparto', descartada: 'Descartada', sin_estado: 'Sin estado' };
+
+function cuadroVaca(a) {
+  const est = S.estados.get(a.id);
+  const cls = est && est.alerta ? 'alerta' : est && est.codigo === 'descartada' ? 'apagada' : '';
+  return `<button class="cuadro ${cls}" data-accion="elegir" data-id="${esc(a.id)}" aria-label="Vaca ${esc(a.arete)}, ${esc(est ? est.texto : '')}"><b>${esc(a.arete)}</b><small>${esc(est ? (ETIQUETA_CORTA[est.codigo] || est.texto) : '')}</small></button>`;
+}
+
 function pintarResultados() {
   const cont = document.getElementById('resultados');
   if (!cont) return;
   const input = document.getElementById('arete');
   const q = normArete(input ? input.value : S.reg.arete);
-  if (!q) {
-    cont.innerHTML = `<p class="suave">Escribe el número de arete de la vaca.</p>`;
-    return;
-  }
-  const todas = S.animales;
-  const exacta = todas.find((a) => a.arete === q);
-  const parecidas = todas.filter((a) => a.arete !== q && a.arete.includes(q)).sort((a, b) => a.arete.localeCompare(b.arete, 'es', { numeric: true })).slice(0, 8);
-  const botones = [exacta, ...parecidas].filter(Boolean).map((a) => `<button class="vaca" data-accion="elegir" data-id="${esc(a.id)}"><div class="fila"><span class="arete">${esc(a.arete)}</span>${estadoChip(S.estados.get(a.id))}</div></button>`).join('');
-  const nueva = !exacta ? `<button class="btn" data-accion="crear-vaca">➕ Vaca nueva: ${esc(q)}</button>` : '';
-  cont.innerHTML = botones + nueva;
+  const porNumero = (x, y) => x.arete.localeCompare(y.arete, 'es', { numeric: true });
+  const orden = S.ordenVacas === 'atencion' ? (x, y) => S.estados.get(x.id).prioridad - S.estados.get(y.id).prioridad || porNumero(x, y) : porNumero;
+  const lista = S.animales.filter((a) => !q || a.arete.includes(q)).sort(orden);
+  const exacta = q && S.animales.some((a) => a.arete === q);
+  const alertas = S.animales.filter((a) => S.estados.get(a.id).alerta).length;
+  const toggle = S.animales.length > 6 ? `<div class="fila" style="gap:8px;margin:0 0 10px"><button class="btn chico ${S.ordenVacas === 'atencion' ? '' : 'sel'}" style="margin:0" data-accion="orden-vacas" data-orden="numero">Por número</button><button class="btn chico ${S.ordenVacas === 'atencion' ? 'sel' : ''}" style="margin:0" data-accion="orden-vacas" data-orden="atencion">Atención primero</button></div>` : '';
+  const nueva = q && !exacta ? `<button class="btn" style="margin-top:12px" data-accion="crear-vaca">➕ Vaca nueva: ${esc(q)}</button>` : '';
+  if (!S.animales.length) { cont.innerHTML = `<p class="suave">Aún no hay vacas. Escribe el arete para crear la primera.</p>${nueva}`; return; }
+  cont.innerHTML = `<p class="suave" style="margin:0 0 8px">${q ? `${lista.length} de ${S.animales.length} vacas` : `${S.animales.length} vacas${alertas ? ` · ${alertas} por atender` : ''}`}. Toca la vaca.</p>${toggle}${lista.length ? `<div class="cuadros">${lista.map(cuadroVaca).join('')}</div>` : '<p class="suave">Ninguna vaca con ese número.</p>'}${nueva}`;
 }
 
 async function crearVaca() {
@@ -597,7 +605,7 @@ function sugerenciaRancho() {
 function vistaInsumos() {
   const P = S.ped || { cargando: true, insumos: [], solicitudes: [], form: {} };
   const f = P.form || {};
-  const opciones = P.insumos.map((i) => `<option value="${esc(i.id)}" ${f.insumo_id === i.id ? 'selected' : ''}>${esc(i.nombre)} (${esc(i.unidad)})</option>`).join('');
+  const opciones = P.insumos.map((i) => `<button class="cuadro ancho ${f.insumo_id === i.id ? 'sel' : ''}" data-accion="ins-elegir" data-id="${esc(i.id)}" aria-pressed="${f.insumo_id === i.id}"><b>${esc(i.nombre)}</b><small>${esc(i.unidad)}</small></button>`).join('');
   const estados = { pendiente: ['alerta', 'Pendiente'], consolidada: ['', 'En compra consolidada'], cancelada: ['gris', 'Cancelada'] };
   const historial = P.solicitudes.map((s) => {
     const [cls, txt] = estados[s.estado] || ['gris', s.estado];
@@ -614,8 +622,8 @@ function vistaInsumos() {
     ${bloqueCorte(P.corte)}
     ${sugerenciaRancho()}
     <div class="card">
-      <label for="insumo">Insumo</label>
-      <select id="insumo" class="campo"><option value="">Elige…</option>${opciones}</select>
+      <label id="insumo">¿Qué insumo?</label>
+      <div class="cuadros dos" role="group" aria-labelledby="insumo">${opciones}</div>
       <label for="cantidad">Cantidad</label>
       <input id="cantidad" type="text" inputmode="numeric" value="${esc(f.cantidad)}" placeholder="10">
       <label for="nota">Nota (opcional)</label>
@@ -629,7 +637,7 @@ function vistaInsumos() {
 }
 
 async function enviarSolicitud() {
-  const form = { insumo_id: document.getElementById('insumo').value, cantidad: document.getElementById('cantidad').value.trim(), nota: document.getElementById('nota').value.trim() };
+  const form = { insumo_id: S.ped.form.insumo_id, cantidad: document.getElementById('cantidad').value.trim(), nota: document.getElementById('nota').value.trim() };
   S.ped.form = form;
   const err = validarSolicitud(form);
   if (err) { S.ped.formError = err; render(); return; }
@@ -638,7 +646,6 @@ async function enviarSolicitud() {
     S.ped.form = { insumo_id: '', cantidad: '', nota: '' };
     S.ped.formError = null;
     limpiarCampos('cantidad', 'nota');
-    const sel = document.getElementById('insumo'); if (sel) sel.value = '';
     toast('Solicitud enviada');
     await cargarInsumos();
   } catch (e) { S.ped.formError = msgError(e); render(); }
@@ -980,7 +987,9 @@ $app.addEventListener('click', async (ev) => {
     case 'abrir-asoc': await abrirAsoc(); break;
     case 'asoc-consolidar': await consolidar(); break;
     case 'orden-estado': await cambiarEstadoOrden(el.dataset.id, el.dataset.estado); break;
-    case 'sug-usar': document.getElementById('insumo').value = el.dataset.id; document.getElementById('cantidad').value = el.dataset.cant; document.getElementById('nota').value = ''; S.ped.formError = null; render(); document.getElementById('cantidad').scrollIntoView({ block: 'center' }); break;
+    case 'orden-vacas': S.ordenVacas = el.dataset.orden; pintarResultados(); break;
+    case 'ins-elegir': S.ped.form.insumo_id = el.dataset.id; S.ped.formError = null; render(); break;
+    case 'sug-usar': S.ped.form.insumo_id = el.dataset.id; document.getElementById('cantidad').value = el.dataset.cant; document.getElementById('nota').value = ''; S.ped.formError = null; render(); document.getElementById('cantidad').scrollIntoView({ block: 'center' }); break;
     case 'corte-guardar': await guardarCorte(); break;
     case 'est-guardar': await guardarEstimacion(el.dataset.id); break;
     case 'orden-copiar': await copiarOrden(el.dataset.id); break;
