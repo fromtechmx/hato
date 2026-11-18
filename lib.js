@@ -177,3 +177,96 @@ export function textoError(e) {
   if (e.code === '23514' || e.code === '22P02' || e.status === 400 || e.status === 422) return 'El servidor rechazó un dato.';
   return e.message || 'No se pudo enviar.';
 }
+
+// ---------- Panel del veterinario ----------
+// Umbrales PROVISIONALES: pendientes de validar con un MVZ.
+export const UMBRALES = { visitaMin: 5, diasSinDatos: 14 };
+
+/** Último dato que el servidor recibió de un rancho (ISO) o null. Ignora lo que aún está solo en el teléfono. */
+export function ultimoDatoTs(animales, eventos) {
+  let max = null;
+  for (const x of [...animales, ...eventos]) {
+    if (x._sync && x._sync !== 'ok') continue;
+    if (x.recibido_en && (!max || x.recibido_en > max)) max = x.recibido_en;
+  }
+  return max;
+}
+
+/** Resumen de pendientes de un rancho a partir de sus vacas y eventos. */
+export function resumenRancho(animales, eventos, hoy, ahoraMs = Date.now(), P = PARAMS) {
+  const porVaca = new Map();
+  for (const e of eventos) {
+    if (!porVaca.has(e.animal_id)) porVaca.set(e.animal_id, []);
+    porVaca.get(e.animal_id).push(e);
+  }
+  const r = { vacas: animales.length, diagnosticar: 0, partoProximo: 0, celo: 0, abiertas: 0, listas: 0, alertas: 0, proxima: null, ultimoDato: ultimoDatoTs(animales, eventos), diasSinDatos: null };
+  let proxima = null;
+  const candidata = (fecha, texto) => { if (!proxima || fecha < proxima.fecha) proxima = { fecha, texto }; };
+  for (const a of animales) {
+    const est = estadoVaca(porVaca.get(a.id) || [], hoy, P);
+    if (est.alerta) r.alertas++;
+    switch (est.codigo) {
+      case 'diagnosticar': r.diagnosticar++; break;
+      case 'parto_proximo': r.partoProximo++; break;
+      case 'celo': r.celo++; break;
+      case 'abierta': r.abiertas++; break;
+      case 'lista': r.listas++; break;
+      case 'servida': candidata(sumarDias(hoy, P.diasDiagnostico - est.dias), 'diagnósticos'); break;
+      case 'gestante': if (est.partoEsperado) candidata(sumarDias(est.partoEsperado, -P.avisoParto), 'partos próximos'); break;
+      case 'posparto': candidata(sumarDias(hoy, P.esperaServicio - est.dias), 'vacas listas para servicio'); break;
+      default: break;
+    }
+  }
+  r.proxima = proxima;
+  if (r.ultimoDato) r.diasSinDatos = Math.max(0, Math.floor((ahoraMs - new Date(r.ultimoDato).getTime()) / 86400000));
+  return r;
+}
+
+/** Recomendación de visita/llamada. Reglas simples y explícitas; no sustituyen el criterio del veterinario. */
+export function recomendarVisita(res, U = UMBRALES) {
+  const enSitio = res.diagnosticar + res.partoProximo;
+  const sinDatos = res.vacas > 0 && res.diasSinDatos !== null && res.diasSinDatos > U.diasSinDatos;
+  const motivos = [];
+  if (enSitio) motivos.push(`${res.diagnosticar} por diagnosticar y ${res.partoProximo} con parto próximo`);
+  if (sinDatos) motivos.push(`${res.diasSinDatos} días sin datos`);
+  if (res.vacas === 0) return { codigo: 'sin_vacas', texto: 'Sin vacas registradas', prioridad: 5, motivo: 'Aún no hay vacas capturadas en este rancho.' };
+  if (enSitio >= U.visitaMin) {
+    return { codigo: 'visitar', texto: 'Visitar esta semana', prioridad: 1, motivo: motivos.join(' · ') };
+  }
+  if (sinDatos) {
+    return { codigo: 'sin_datos', texto: 'Llamar: sin datos recientes', prioridad: 3, motivo: `${motivos.join(' · ')}. Cero pendientes puede significar que nadie está capturando.` };
+  }
+  if (res.alertas > 0) {
+    return { codigo: 'llamar', texto: 'Llamar primero', prioridad: 2, motivo: `${res.alertas} vaca(s) por atender; pocas para justificar el viaje.` };
+  }
+  return { codigo: 'sin_urgencia', texto: 'Sin urgencia', prioridad: 4, motivo: res.proxima ? `Próximos pendientes: ${res.proxima.texto} desde el ${fechaCorta(res.proxima.fecha)}.` : 'Sin pendientes a la vista.' };
+}
+
+// ---------- Panel de la asociación ----------
+
+/** Agrupa solicitudes pendientes por insumo, con el desglose por rancho. */
+export function agruparSolicitudes(solicitudes, insumos, ranchos) {
+  const insumoPor = new Map(insumos.map((i) => [i.id, i]));
+  const ranchoPor = new Map(ranchos.map((r) => [r.id, r]));
+  const grupos = new Map();
+  for (const s of solicitudes) {
+    if (s.estado !== 'pendiente') continue;
+    const ins = insumoPor.get(s.insumo_id);
+    if (!ins) continue;
+    if (!grupos.has(ins.id)) grupos.set(ins.id, { insumo_id: ins.id, nombre: ins.nombre, unidad: ins.unidad, total: 0, ranchos: new Map() });
+    const g = grupos.get(ins.id);
+    g.total += s.cantidad;
+    const nombre = ranchoPor.get(s.rancho_id)?.nombre || 'Rancho';
+    g.ranchos.set(nombre, (g.ranchos.get(nombre) || 0) + s.cantidad);
+  }
+  return [...grupos.values()]
+    .map((g) => ({ ...g, ranchos: [...g.ranchos.entries()].map(([rancho, cantidad]) => ({ rancho, cantidad })).sort((a, b) => b.cantidad - a.cantidad) }))
+    .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+}
+
+export function validarSolicitud({ insumo_id, cantidad }) {
+  if (!insumo_id) return 'Elige el insumo.';
+  const n = Number(cantidad);
+  if (!Number.isInteger(n) || n < 1 || n > 100000) return 'La cantidad debe ser un número entero mayor que cero.';
+  return null;
+}

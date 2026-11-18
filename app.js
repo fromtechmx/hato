@@ -1,6 +1,6 @@
 // HATO · app. Pantallas y flujo. Todo se guarda primero en el teléfono; se envía cuando hay conexión.
 
-import { PARAMS, TIPOS, textoTipo, uuid, hoyLocal, sumarDias, fechaCorta, normArete, validarEvento, eventosVigentes, estadoVaca, tipoSugerido, ordenarTipos } from './lib.js';
+import { PARAMS, TIPOS, textoTipo, uuid, hoyLocal, sumarDias, fechaCorta, normArete, validarEvento, eventosVigentes, estadoVaca, tipoSugerido, ordenarTipos, UMBRALES, resumenRancho, recomendarVisita, agruparSolicitudes, validarSolicitud } from './lib.js';
 import { openIdbStore } from './store.js';
 import { createApi } from './api.js';
 import { createSync } from './sync.js';
@@ -30,6 +30,10 @@ const S = {
   loginError: null,
   loginEmail: '',
   cargando: false,
+  admin: [],
+  panel: [],
+  ped: null,
+  asoc: null,
 };
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -39,11 +43,14 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 async function refrescar() {
   if (!store) return;
   const ranchoId = S.rancho ? S.rancho.id : null;
-  const animales = (await store.all('animales')).filter((a) => a.rancho_id === ranchoId);
-  const eventos = (await store.all('eventos')).filter((e) => e.rancho_id === ranchoId);
+  const todosA = await store.all('animales');
+  const todosE = await store.all('eventos');
+  const animales = todosA.filter((a) => a.rancho_id === ranchoId);
+  const eventos = todosE.filter((e) => e.rancho_id === ranchoId);
   S.animales = animales;
   S.eventos = eventos;
   const hoy = hoyLocal();
+  S.panel = calcularPanel(todosA, todosE, hoy);
   const porVaca = new Map();
   for (const e of eventos) {
     if (!porVaca.has(e.animal_id)) porVaca.set(e.animal_id, []);
@@ -63,6 +70,7 @@ async function sincronizarYRefrescar(manual = false) {
     res = await sync.sincronizar();
     // Si cambió la lista de ranchos, se actualiza.
     S.ranchos = (await store.getMeta('ranchos')) || [];
+    S.admin = (await store.getMeta('admin')) || [];
     if (S.rancho && !S.ranchos.find((r) => r.id === S.rancho.id)) S.rancho = S.ranchos[0] || null;
     if (!S.rancho && S.ranchos.length) S.rancho = S.ranchos[0];
   } finally {
@@ -70,6 +78,7 @@ async function sincronizarYRefrescar(manual = false) {
   }
   await refrescar();
   if (S.vista === 'registro' && S.reg && S.reg.paso >= 1) actualizarChip();
+  else if (S.vista === 'asoc' || S.vista === 'insumos') actualizarChip(); // no se pisa lo que se está escribiendo
   else render();
   if (manual && res) mostrarResultado(res);
   return res;
@@ -162,11 +171,17 @@ function vistaLogin() {
 }
 
 function vistaInicio() {
-  if (!S.rancho) {
+  const hayPanel = S.panel.length > 0;
+  const hayAsoc = S.admin.length > 0;
+  if (!S.rancho && !hayPanel && !hayAsoc) {
     return marco(`<div class="card"><h2>Aún no tienes un rancho asignado</h2><p>Pide a tu cooperativa o a quien administra HATO que vincule tu cuenta (<b>${esc(user ? user.email : '')}</b>) a un rancho. Luego toca el botón de arriba para actualizar.</p><button class="btn primario" data-accion="sync">Actualizar ahora</button></div>${pie()}`);
   }
+  const extra = `${hayPanel ? `<button class="btn" style="margin-top:12px" data-accion="ir" data-vista="panel">🩺 Panel del veterinario${S.panel.some((p) => p.rec.prioridad === 1) ? ' · hay visitas urgentes' : ''}</button>` : ''}
+    ${hayAsoc ? `<button class="btn" data-accion="abrir-asoc">🤝 Panel de la asociación</button>` : ''}`;
+  if (!S.rancho) return marco(`${extra}${pie()}`);
   const porAtender = [...S.estados.values()].filter((e) => e.alerta).length;
   const info = [S.rancho.socio, S.rancho.cooperativa].filter(Boolean).join(' · ');
+  const puedePedir = S.rancho.rol === 'dueno' || S.rancho.rol === 'mvz';
   return marco(`
     ${info ? `<p class="suave" style="margin:0 0 10px">${esc(info)}</p>` : ''}
     <button class="btn primario" style="min-height:76px;font-size:22px" data-accion="registrar">➕ Registrar evento</button>
@@ -175,6 +190,8 @@ function vistaInicio() {
       <button class="btn tile" data-accion="ir" data-vista="vacas"><b>${S.animales.length}</b><span>Mis vacas</span></button>
     </div>
     <button class="btn" style="margin-top:12px" data-accion="ir" data-vista="pendientes">${S.pend.total ? `⏳ ${S.pend.total} por enviar` : '✓ Todo enviado'} · ver detalle</button>
+    ${puedePedir ? `<button class="btn" data-accion="abrir-insumos">📦 Pedir insumos</button>` : ''}
+    ${extra}
     ${pie()}`);
 }
 
@@ -326,6 +343,8 @@ function render() {
   if (!user) { $app.innerHTML = vistaLogin(); return; }
   if (S.cargando) { $app.innerHTML = `${cabecera()}<main><p class="suave">Descargando tus datos…</p></main>`; return; }
   if (S.vista === 'registro' && S.reg) capturarCampos();
+  if (S.vista === 'asoc') capturarFormAsoc();
+  if (S.vista === 'insumos' && S.ped && document.getElementById('insumo')) S.ped.form = { insumo_id: document.getElementById('insumo').value, cantidad: document.getElementById('cantidad').value, nota: document.getElementById('nota').value };
   let html;
   switch (S.vista) {
     case 'vacas': html = vistaVacas(); break;
@@ -333,6 +352,9 @@ function render() {
     case 'ficha': html = vistaFicha(); break;
     case 'registro': html = S.rancho ? vistaRegistro() : vistaInicio(); break;
     case 'pendientes': html = vistaPendientes(); break;
+    case 'panel': html = vistaPanel(); break;
+    case 'insumos': html = S.rancho ? vistaInsumos() : vistaInicio(); break;
+    case 'asoc': html = vistaAsoc(); break;
     default: html = vistaInicio();
   }
   $app.innerHTML = html;
@@ -437,6 +459,284 @@ async function anularEvento(id) {
   sincronizarYRefrescar();
 }
 
+// ---------- Panel del veterinario ----------
+
+function calcularPanel(todosA, todosE, hoy) {
+  return S.ranchos.filter((r) => r.rol === 'mvz').map((r) => {
+    const res = resumenRancho(todosA.filter((a) => a.rancho_id === r.id), todosE.filter((e) => e.rancho_id === r.id), hoy);
+    return { rancho: r, res, rec: recomendarVisita(res) };
+  }).sort((a, b) => a.rec.prioridad - b.rec.prioridad
+    || (b.res.diagnosticar + b.res.partoProximo) - (a.res.diagnosticar + a.res.partoProximo)
+    || a.rancho.nombre.localeCompare(b.rancho.nombre, 'es'));
+}
+
+function claseRec(c) { return c === 'visitar' ? 'mal' : c === 'llamar' || c === 'sin_datos' ? 'alerta' : c === 'sin_vacas' ? 'gris' : ''; }
+function textoDato(res) {
+  if (res.diasSinDatos === null) return 'sin datos';
+  if (res.diasSinDatos === 0) return 'hoy';
+  if (res.diasSinDatos === 1) return 'ayer';
+  return `hace ${res.diasSinDatos} días`;
+}
+
+function vistaPanel() {
+  const tarjetas = S.panel.map((p) => {
+    const viejo = p.res.diasSinDatos !== null && p.res.diasSinDatos > UMBRALES.diasSinDatos;
+    return `<div class="card">
+      <div class="fila"><b>${esc(p.rancho.nombre)}</b><span class="estado ${claseRec(p.rec.codigo)}">${esc(p.rec.texto)}</span></div>
+      <div class="metricas">
+        <div><b>${p.res.diagnosticar}</b><span>Toca diagnóstico</span></div>
+        <div><b>${p.res.partoProximo}</b><span>Parto próximo</span></div>
+        <div><b>${p.res.celo + p.res.abiertas + p.res.listas}</b><span>Celo, abiertas o listas</span></div>
+        <div><b class="${viejo ? 'rojo' : ''}" style="font-size:18px">${esc(textoDato(p.res))}</b><span>Último dato</span></div>
+      </div>
+      <p class="suave" style="margin:8px 0">${esc(p.rec.motivo)}</p>
+      <button class="btn chico" data-accion="panel-abrir" data-id="${esc(p.rancho.id)}">Ver vacas</button>
+    </div>`;
+  }).join('');
+  const proximos = S.panel.filter((p) => p.res.proxima).sort((a, b) => a.res.proxima.fecha.localeCompare(b.res.proxima.fecha));
+  const lista = proximos.length
+    ? `<div class="card"><b>Próximos pendientes por fecha</b>${proximos.map((p) => `<div class="ev"><div class="fila"><span>${esc(p.rancho.nombre)}</span><span class="suave">${esc(fechaCorta(p.res.proxima.fecha))}</span></div><span class="suave">${esc(p.res.proxima.texto)}</span></div>`).join('')}</div>`
+    : '';
+  return marco(`
+    <button class="atras" data-accion="ir" data-vista="inicio">‹ Inicio</button>
+    <h2>Panel del veterinario</h2>
+    ${tarjetas || '<p class="suave">No tienes ranchos asignados como veterinario.</p>'}
+    ${lista}
+    <p class="suave">Las recomendaciones salen de reglas provisionales (${UMBRALES.visitaMin} o más pendientes en sitio = visita; más de ${UMBRALES.diasSinDatos} días sin datos = llamar). Faltan validarlas con un veterinario y no sustituyen su criterio. Se calcula con los datos de este teléfono; funciona sin internet.</p>
+    ${pie()}`);
+}
+
+// ---------- Insumos (rancho) ----------
+
+function limpiarCampos(...ids) { for (const id of ids) { const el = document.getElementById(id); if (el) el.value = ''; } }
+
+function msgError(e) {
+  if (e && e.network) return 'Sin conexión. Esto necesita internet.';
+  if (e && (e.status === 401 || e.auth)) return 'Tu sesión venció. Entra de nuevo.';
+  if (e && (e.status === 403 || e.code === '42501')) return 'No tienes permiso para hacer esto.';
+  return (e && e.message) || 'Ocurrió un error.';
+}
+
+async function abrirInsumos() {
+  S.ped = { cargando: true, error: null, formError: null, insumos: [], solicitudes: [], form: { insumo_id: '', cantidad: '', nota: '' } };
+  ir('insumos');
+  await cargarInsumos();
+}
+
+async function cargarInsumos() {
+  try {
+    const [ins, sol] = await Promise.all([
+      api.rest('GET', '/insumos?select=id,nombre,unidad&activo=eq.true&order=nombre.asc'),
+      api.rest('GET', `/solicitudes_insumo?rancho_id=eq.${encodeURIComponent(S.rancho.id)}&select=id,cantidad,estado,nota,creado_en,insumo:insumos(nombre,unidad)&order=creado_en.desc&limit=50`),
+    ]);
+    S.ped.insumos = ins || [];
+    S.ped.solicitudes = sol || [];
+    S.ped.error = null;
+  } catch (e) { S.ped.error = msgError(e); }
+  S.ped.cargando = false;
+  if (S.vista === 'insumos') render();
+}
+
+function vistaInsumos() {
+  const P = S.ped || { cargando: true, insumos: [], solicitudes: [], form: {} };
+  const f = P.form || {};
+  const opciones = P.insumos.map((i) => `<option value="${esc(i.id)}" ${f.insumo_id === i.id ? 'selected' : ''}>${esc(i.nombre)} (${esc(i.unidad)})</option>`).join('');
+  const estados = { pendiente: ['alerta', 'Pendiente'], consolidada: ['', 'En compra consolidada'], cancelada: ['gris', 'Cancelada'] };
+  const historial = P.solicitudes.map((s) => {
+    const [cls, txt] = estados[s.estado] || ['gris', s.estado];
+    return `<div class="ev"><div class="fila"><b>${esc(s.insumo ? s.insumo.nombre : 'Insumo')} · ${esc(s.cantidad)} ${esc(s.insumo ? s.insumo.unidad : '')}</b><span class="estado ${cls}">${esc(txt)}</span></div>
+      <span class="suave">${esc(fechaCorta(String(s.creado_en).slice(0, 10)))}${s.nota ? ` · ${esc(s.nota)}` : ''}</span>
+      ${s.estado === 'pendiente' ? `<div><button class="btn chico peligro" style="margin-top:6px" data-accion="sol-cancelar" data-id="${esc(s.id)}">Cancelar</button></div>` : ''}</div>`;
+  }).join('');
+  return marco(`
+    <button class="atras" data-accion="ir" data-vista="inicio">‹ Inicio</button>
+    <h2>Pedir insumos</h2>
+    <p class="suave">Tu cooperativa junta los pedidos de todos los ranchos para comprar en conjunto. Necesita internet.</p>
+    ${P.error ? `<div class="aviso mal">${esc(P.error)}</div>` : ''}
+    ${P.cargando ? '<p class="suave">Cargando…</p>' : `
+    <div class="card">
+      <label for="insumo">Insumo</label>
+      <select id="insumo" class="campo"><option value="">Elige…</option>${opciones}</select>
+      <label for="cantidad">Cantidad</label>
+      <input id="cantidad" type="text" inputmode="numeric" value="${esc(f.cantidad)}" placeholder="10">
+      <label for="nota">Nota (opcional)</label>
+      <input id="nota" type="text" value="${esc(f.nota)}" placeholder="Para qué lo necesitas">
+      ${P.formError ? `<div class="aviso mal" style="margin-top:10px">${esc(P.formError)}</div>` : ''}
+      <button class="btn primario" style="margin-top:12px" data-accion="sol-enviar">Enviar solicitud</button>
+    </div>
+    <div class="card"><b>Mis solicitudes</b>${historial || '<p class="suave">Aún no has pedido nada.</p>'}</div>`}
+    ${pie()}`);
+}
+
+async function enviarSolicitud() {
+  const form = { insumo_id: document.getElementById('insumo').value, cantidad: document.getElementById('cantidad').value.trim(), nota: document.getElementById('nota').value.trim() };
+  S.ped.form = form;
+  const err = validarSolicitud(form);
+  if (err) { S.ped.formError = err; render(); return; }
+  try {
+    await api.rest('POST', '/solicitudes_insumo', { id: uuid(), rancho_id: S.rancho.id, insumo_id: form.insumo_id, cantidad: Number(form.cantidad), nota: form.nota || null, creado_por: user.id }, { Prefer: 'return=minimal' });
+    S.ped.form = { insumo_id: '', cantidad: '', nota: '' };
+    S.ped.formError = null;
+    limpiarCampos('cantidad', 'nota');
+    const sel = document.getElementById('insumo'); if (sel) sel.value = '';
+    toast('Solicitud enviada');
+    await cargarInsumos();
+  } catch (e) { S.ped.formError = msgError(e); render(); }
+}
+
+async function cancelarSolicitud(id) {
+  try {
+    const filas = await api.rest('PATCH', `/solicitudes_insumo?id=eq.${encodeURIComponent(id)}`, { estado: 'cancelada' }, { Prefer: 'return=representation' });
+    if (!Array.isArray(filas) || !filas.length) toast('Ya no se puede cancelar: tu cooperativa la incluyó en una compra.');
+    else toast('Solicitud cancelada');
+  } catch (e) { toast(msgError(e)); }
+  await cargarInsumos();
+}
+
+// ---------- Panel de la asociación ----------
+
+async function abrirAsoc() {
+  S.asoc = { cargando: true, error: null, coop: S.admin[0], solicitudes: [], insumos: [], ranchos: [], ordenes: [], form: { tipo: 'veterinario', destinatario: '', nota: '' }, formError: null, sel: null, insForm: { nombre: '', unidad: '' }, insError: null };
+  ir('asoc');
+  await cargarAsoc();
+}
+
+async function cargarAsoc() {
+  try {
+    const [sol, ins, ran, ord] = await Promise.all([
+      api.rest('GET', '/solicitudes_insumo?select=id,rancho_id,insumo_id,cantidad,estado,orden_id,creado_en&order=creado_en.desc&limit=1000'),
+      api.rest('GET', '/insumos?select=id,nombre,unidad,activo&order=nombre.asc'),
+      api.rest('GET', '/ranchos?select=id,nombre'),
+      api.rest('GET', '/ordenes_consolidadas?select=id,destinatario_tipo,destinatario,nota,estado,creada_en&order=creada_en.desc&limit=30'),
+    ]);
+    Object.assign(S.asoc, { solicitudes: sol || [], insumos: ins || [], ranchos: ran || [], ordenes: ord || [], error: null });
+    const ids = agruparSolicitudes(S.asoc.solicitudes, S.asoc.insumos, S.asoc.ranchos).map((g) => g.insumo_id);
+    S.asoc.sel = new Set(S.asoc.sel ? ids.filter((i) => S.asoc.sel.has(i)) : ids);
+  } catch (e) { S.asoc.error = msgError(e); }
+  S.asoc.cargando = false;
+  if (S.vista === 'asoc') render();
+}
+
+const TIPOS_DEST = { veterinario: 'Veterinario', proveedor: 'Proveedor', otro: 'Otra instancia' };
+const ESTADOS_ORDEN = { borrador: ['alerta', 'Borrador'], enviada: ['', 'Enviada'], recibida: ['', 'Recibida'], cancelada: ['gris', 'Cancelada'] };
+
+function itemsDeOrden(ordenId) {
+  const A = S.asoc;
+  const porInsumo = new Map();
+  for (const s of A.solicitudes) {
+    if (s.orden_id !== ordenId) continue;
+    porInsumo.set(s.insumo_id, (porInsumo.get(s.insumo_id) || 0) + s.cantidad);
+  }
+  return [...porInsumo.entries()].map(([id, total]) => {
+    const i = A.insumos.find((x) => x.id === id) || { nombre: 'Insumo', unidad: '' };
+    return { nombre: i.nombre, unidad: i.unidad, total };
+  }).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+}
+
+function vistaAsoc() {
+  const A = S.asoc;
+  if (!A) return vistaInicio();
+  const grupos = agruparSolicitudes(A.solicitudes, A.insumos, A.ranchos);
+  const demanda = grupos.map((g) => `<label class="fila" style="font-weight:400;margin:0;padding:10px 0;border-top:1px solid var(--linea);align-items:flex-start">
+      <input type="checkbox" data-grupo="${esc(g.insumo_id)}" ${A.sel && A.sel.has(g.insumo_id) ? 'checked' : ''} style="width:26px;height:26px;margin-top:2px">
+      <span style="flex:1"><b>${esc(g.nombre)}</b> · ${esc(g.total)} ${esc(g.unidad)}<br><span class="suave">${g.ranchos.map((r) => `${esc(r.rancho)}: ${esc(r.cantidad)}`).join(' · ')}</span></span></label>`).join('');
+  const f = A.form;
+  const ordenes = A.ordenes.map((o) => {
+    const [cls, txt] = ESTADOS_ORDEN[o.estado] || ['gris', o.estado];
+    const items = itemsDeOrden(o.id);
+    const sig = o.estado === 'borrador' ? ['enviada', 'Marcar como enviada'] : o.estado === 'enviada' ? ['recibida', 'Marcar como recibida'] : null;
+    return `<div class="ev"><div class="fila"><b>${esc(TIPOS_DEST[o.destinatario_tipo] || '')}: ${esc(o.destinatario)}</b><span class="estado ${cls}">${esc(txt)}</span></div>
+      <span class="suave">${esc(fechaCorta(String(o.creada_en).slice(0, 10)))}${o.nota ? ` · ${esc(o.nota)}` : ''}</span>
+      <div>${items.map((i) => `${esc(i.nombre)}: ${esc(i.total)} ${esc(i.unidad)}`).join('<br>')}</div>
+      <div style="margin-top:6px"><button class="btn chico" data-accion="orden-copiar" data-id="${esc(o.id)}">Copiar texto</button>${sig ? `<button class="btn chico" data-accion="orden-estado" data-id="${esc(o.id)}" data-estado="${sig[0]}">${sig[1]}</button>` : ''}</div></div>`;
+  }).join('');
+  const catalogo = A.insumos.map((i) => `<div class="ev"><span>${esc(i.nombre)}</span> <span class="suave">· ${esc(i.unidad)}${i.activo ? '' : ' · inactivo'}</span></div>`).join('');
+  return marco(`
+    <button class="atras" data-accion="ir" data-vista="inicio">‹ Inicio</button>
+    <h2>Panel de la asociación</h2>
+    <p class="suave">${esc(A.coop ? A.coop.nombre : '')}. Aquí ves lo que piden los ranchos para comprar en conjunto. No ves sus vacas ni sus registros. Necesita internet.</p>
+    ${A.error ? `<div class="aviso mal">${esc(A.error)}</div>` : ''}
+    ${A.cargando ? '<p class="suave">Cargando…</p>' : `
+    <div class="card"><b>Demanda pendiente</b>${demanda || '<p class="suave">No hay solicitudes pendientes.</p>'}</div>
+    ${grupos.length ? `<div class="card"><b>Crear compra consolidada</b>
+      <p class="suave" style="margin:4px 0 0">Incluye los insumos marcados arriba.</p>
+      <label for="tipoDest">Se compra a</label>
+      <select id="tipoDest" class="campo">${Object.entries(TIPOS_DEST).map(([k, v]) => `<option value="${k}" ${f.tipo === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+      <label for="destinatario">Nombre</label>
+      <input id="destinatario" type="text" value="${esc(f.destinatario)}" placeholder="Dr. Nombre o proveedor">
+      <label for="notaOrden">Nota (opcional)</label>
+      <input id="notaOrden" type="text" value="${esc(f.nota)}">
+      ${A.formError ? `<div class="aviso mal" style="margin-top:10px">${esc(A.formError)}</div>` : ''}
+      <button class="btn primario" style="margin-top:12px" data-accion="asoc-consolidar">Crear compra consolidada</button></div>` : ''}
+    <div class="card"><b>Compras consolidadas</b>${ordenes || '<p class="suave">Aún no hay compras.</p>'}<p class="suave">Una compra no se puede deshacer desde aquí.</p></div>
+    <div class="card"><b>Catálogo de insumos</b>${catalogo || '<p class="suave">Vacío.</p>'}
+      <label for="insNombre">Agregar insumo</label><input id="insNombre" type="text" value="${esc(A.insForm.nombre)}" placeholder="Nombre">
+      <input id="insUnidad" type="text" style="margin-top:8px" value="${esc(A.insForm.unidad)}" placeholder="Unidad (caja, dosis, litro…)">
+      ${A.insError ? `<div class="aviso mal" style="margin-top:10px">${esc(A.insError)}</div>` : ''}
+      <button class="btn" style="margin-top:10px" data-accion="insumo-crear">Agregar al catálogo</button></div>`}
+    ${pie()}`);
+}
+
+function capturarFormAsoc() {
+  const A = S.asoc;
+  if (!A) return;
+  const g = (id) => { const el = document.getElementById(id); return el ? el.value : null; };
+  if (g('tipoDest') !== null) A.form = { tipo: g('tipoDest'), destinatario: g('destinatario') || '', nota: g('notaOrden') || '' };
+  if (g('insNombre') !== null) A.insForm = { nombre: g('insNombre') || '', unidad: g('insUnidad') || '' };
+}
+
+async function consolidar() {
+  const A = S.asoc;
+  capturarFormAsoc();
+  const f = A.form;
+  const ids = [...(A.sel || [])];
+  if (!ids.length) { A.formError = 'Marca al menos un insumo.'; render(); return; }
+  if (!f.destinatario.trim() || f.destinatario.trim().length < 2) { A.formError = 'Escribe a quién se compra.'; render(); return; }
+  const grupos = agruparSolicitudes(A.solicitudes, A.insumos, A.ranchos).filter((g) => A.sel.has(g.insumo_id));
+  if (!window.confirm(`Se creará una compra a ${f.destinatario.trim()} con ${grupos.map((g) => `${g.total} ${g.unidad} de ${g.nombre}`).join(', ')}. Los ranchos ya no podrán cancelar esas solicitudes. ¿Continuar?`)) return;
+  try {
+    await api.rest('POST', '/rpc/consolidar_solicitudes', { p_cooperativa: A.coop.id, p_tipo: f.tipo, p_destinatario: f.destinatario.trim(), p_nota: f.nota.trim() || null, p_insumo_ids: ids });
+    A.form = { tipo: f.tipo, destinatario: '', nota: '' };
+    A.formError = null;
+    A.sel = null;
+    limpiarCampos('destinatario', 'notaOrden');
+    toast('Compra consolidada creada');
+    await cargarAsoc();
+  } catch (e) { A.formError = e.status === 404 ? 'No hay solicitudes pendientes para esos insumos.' : msgError(e); render(); }
+}
+
+async function cambiarEstadoOrden(id, estado) {
+  try {
+    const filas = await api.rest('PATCH', `/ordenes_consolidadas?id=eq.${encodeURIComponent(id)}`, { estado }, { Prefer: 'return=representation' });
+    if (!Array.isArray(filas) || !filas.length) toast('No se pudo actualizar.');
+  } catch (e) { toast(msgError(e)); }
+  await cargarAsoc();
+}
+
+async function copiarOrden(id) {
+  const o = S.asoc.ordenes.find((x) => x.id === id);
+  if (!o) return;
+  const lineas = itemsDeOrden(id).map((i) => `- ${i.nombre}: ${i.total} ${i.unidad}`);
+  const texto = `Compra consolidada · ${S.asoc.coop ? S.asoc.coop.nombre : ''}\nPara: ${o.destinatario}\n${lineas.join('\n')}${o.nota ? `\nNota: ${o.nota}` : ''}`;
+  try { await navigator.clipboard.writeText(texto); toast('Texto copiado'); } catch { window.prompt('Copia este texto:', texto); }
+}
+
+async function crearInsumo() {
+  const A = S.asoc;
+  capturarFormAsoc();
+  const nombre = A.insForm.nombre.trim();
+  const unidad = A.insForm.unidad.trim();
+  if (nombre.length < 2 || !unidad) { A.insError = 'Escribe el nombre y la unidad.'; render(); return; }
+  try {
+    await api.rest('POST', '/insumos', { cooperativa_id: A.coop.id, nombre, unidad }, { Prefer: 'return=minimal' });
+    A.insForm = { nombre: '', unidad: '' };
+    A.insError = null;
+    limpiarCampos('insNombre', 'insUnidad');
+    toast('Insumo agregado');
+    await cargarAsoc();
+  } catch (e) { A.insError = e.status === 409 ? 'Ese insumo ya existe.' : msgError(e); render(); }
+}
+
 // ---------- Eventos de pantalla ----------
 
 $app.addEventListener('click', async (ev) => {
@@ -464,6 +764,15 @@ $app.addEventListener('click', async (ev) => {
     }
     case 'reingresar': S.loginEmail = (api.getSession() || { user: {} }).user.email || ''; user = null; render(); break;
     case 'salir': await salir(); break;
+    case 'panel-abrir': { const r = S.ranchos.find((x) => x.id === el.dataset.id); if (r) { S.rancho = r; await store.setMeta('ranchoActivo', r.id); await refrescar(); ir('atender'); } break; }
+    case 'abrir-insumos': await abrirInsumos(); break;
+    case 'sol-enviar': await enviarSolicitud(); break;
+    case 'sol-cancelar': await cancelarSolicitud(el.dataset.id); break;
+    case 'abrir-asoc': await abrirAsoc(); break;
+    case 'asoc-consolidar': await consolidar(); break;
+    case 'orden-estado': await cambiarEstadoOrden(el.dataset.id, el.dataset.estado); break;
+    case 'orden-copiar': await copiarOrden(el.dataset.id); break;
+    case 'insumo-crear': await crearInsumo(); break;
     default: break;
   }
 });
@@ -479,6 +788,10 @@ $app.addEventListener('input', (ev) => {
 });
 
 $app.addEventListener('change', async (ev) => {
+  if (ev.target.dataset && ev.target.dataset.grupo && S.asoc) {
+    if (ev.target.checked) S.asoc.sel.add(ev.target.dataset.grupo); else S.asoc.sel.delete(ev.target.dataset.grupo);
+    return;
+  }
   if (ev.target.id === 'selRancho') {
     S.rancho = S.ranchos.find((r) => r.id === ev.target.value) || S.rancho;
     await store.setMeta('ranchoActivo', S.rancho.id);
@@ -514,7 +827,7 @@ async function salir() {
   await api.logout();
   if (store) store.close();
   store = null; sync = null; user = null;
-  S.rancho = null; S.ranchos = []; S.animales = []; S.eventos = []; S.reg = null; S.vista = 'inicio';
+  S.rancho = null; S.ranchos = []; S.admin = []; S.panel = []; S.ped = null; S.asoc = null; S.animales = []; S.eventos = []; S.reg = null; S.vista = 'inicio';
   render();
 }
 
@@ -525,6 +838,7 @@ async function abrirUsuario(primeraVez = false) {
   store = await openIdbStore(user.id);
   sync = createSync({ store, api });
   S.ranchos = (await store.getMeta('ranchos')) || [];
+  S.admin = (await store.getMeta('admin')) || [];
   const activo = await store.getMeta('ranchoActivo');
   S.rancho = S.ranchos.find((r) => r.id === activo) || S.ranchos[0] || null;
   S.vista = 'inicio';

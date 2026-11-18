@@ -44,6 +44,41 @@ TZ=America/Mexico_City node --test        # 25 pruebas
 python3 e2e.py                            # navegador (requiere playwright + chromium)
 ```
 
+
+## Paneles por rol (fases 2 y 3)
+
+Qué ve cada quien lo decide la base de datos, no la app:
+
+| Rol | Cómo se asigna | Ve |
+|---|---|---|
+| Dueño / vaquero | `membresias` con rol `dueno` o `vaquero` | Solo su rancho. El dueño además pide insumos |
+| Veterinario | `membresias` con rol `mvz` en cada rancho que atiende | Panel del veterinario (todos sus ranchos, también sin internet) |
+| Administrador de asociación | fila en `admins_cooperativa` | Panel de la asociación: demanda de insumos y compras consolidadas. **No ve vacas ni eventos** |
+
+Ejemplo para dar de alta (cambia los UUID):
+```sql
+insert into membresias(user_id, rancho_id, rol, activo) values ('USER', 'RANCHO', 'mvz', true);
+insert into admins_cooperativa(user_id, cooperativa_id) values ('USER', 'COOP');
+```
+
+Datos de demostración en Supabase: 5 ranchos sintéticos (A a E), vacas con `nombre = 'SIM'`, un catálogo de 6 insumos y 6 solicitudes. Tu usuario es dueño de A, veterinario de B a E y administrador de la cooperativa DEMO. Para limpiar la simulación: borrar eventos con `datos->>'sim' = 'true'` y luego las vacas con `nombre = 'SIM'`.
+
+### Reglas provisionales del panel del veterinario (sin validar por un MVZ)
+- 5 o más vacas por diagnosticar o con parto próximo en un rancho → "Visitar".
+- Menos de 5 pero con vacas por atender → "Llamar primero".
+- Más de 14 días sin que el servidor reciba datos → "Llamar: sin datos recientes" (cero pendientes con datos viejos no es buena noticia).
+- Si no, "Sin urgencia", con la fecha en que aparecerán los siguientes pendientes.
+Se ajustan en `UMBRALES` y `PARAMS` de `lib.js`.
+
+### Límites de las fases 2 y 3
+- Pedir insumos y el panel de la asociación **necesitan internet** (no hay cola sin conexión como en el registro de vacas).
+- Una compra consolidada no se puede cancelar desde la app, y cancelarla no liberaría las solicitudes. Falta definir ese flujo.
+- Los insumos no se calculan solos a partir de los eventos (por ejemplo, pajillas según inseminaciones): los ranchos piden y la asociación junta.
+- El administrador ve qué rancho pidió qué. Hay que acordar con la cooperativa si esa visibilidad es aceptable para los socios.
+- Si un administrador lo es de más de una cooperativa, la app muestra solo la primera.
+- Probado: lógica (33 pruebas), navegador contra un Supabase simulado, y las reglas de acceso de las tablas nuevas en el Supabase real (20 chequeos con roles simulados). No probado: la app contra el Supabase real desde un navegador con los paneles nuevos, ni un celular real.
+- La función `consolidar_solicitudes` es ejecutable por usuarios autenticados (el asesor de seguridad de Supabase lo marca como advertencia). Es intencional: verifica dentro que quien llama administra esa cooperativa, y eso se probó.
+
 ## Límites y riesgos pendientes
 
 - Datos locales en el celular sin cifrar; en celulares compartidos, cerrar sesión avisa si hay pendientes.

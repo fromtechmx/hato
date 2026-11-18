@@ -84,6 +84,16 @@ export function createSync({ store, api, pagina = 1000 }) {
     return ranchos;
   }
 
+  async function traerAdmin() {
+    try {
+      const filas = await api.rest('GET', '/admins_cooperativa?select=cooperativa:cooperativas(id,nombre)');
+      const admin = (filas || []).filter((f) => f.cooperativa).map((f) => ({ id: f.cooperativa.id, nombre: f.cooperativa.nombre }));
+      await store.setMeta('admin', admin);
+    } catch (e) {
+      if (e.network || e.auth || e.status === 401) throw e; // otros errores: se conserva lo último que se supo
+    }
+  }
+
   async function traerTabla(tabla, ranchoId, res) {
     const claveCursor = `cursor:${tabla}:${ranchoId}`;
     const guardado = await store.getMeta(claveCursor);
@@ -114,6 +124,7 @@ export function createSync({ store, api, pagina = 1000 }) {
 
   async function traer(res) {
     const ranchos = await traerRanchos();
+    await traerAdmin();
     for (const r of ranchos) {
       await traerTabla('animales', r.id, res); // primero las vacas, luego sus eventos
       await traerTabla('eventos', r.id, res);
