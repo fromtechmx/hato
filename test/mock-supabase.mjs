@@ -20,6 +20,7 @@ export class MockSupabase {
     this.solicitudes = [];
     this.ordenes = [];
     this.entregas = [];
+    this.estimaciones = [];
     this.recepciones = [];
     this.seqOrden = 0;
     this.tokens = new Map();
@@ -50,14 +51,16 @@ export class MockSupabase {
     this.membresias.push({ user_id: user.id, rancho_id: rancho.id, rol, activo });
   }
 
+  estimar(rancho, insumo, base, factor) { this.estimaciones.push({ rancho_id: rancho.id, insumo_id: insumo.id, base, factor }); }
+
   administrar(user, cooperativaNombre) {
     const c = this.cooperativas.find((x) => x.nombre === cooperativaNombre);
     this.admins.push({ user_id: user.id, cooperativa_id: c.id });
   }
 
-  crearInsumo(cooperativaNombre, nombre, unidad, estimar = {}) {
+  crearInsumo(cooperativaNombre, nombre, unidad) {
     const c = this.cooperativas.find((x) => x.nombre === cooperativaNombre);
-    const i = { id: crypto.randomUUID(), cooperativa_id: c.id, nombre, unidad, activo: true, estimar_base: estimar.base || 'ninguna', estimar_factor: estimar.factor || 0 };
+    const i = { id: crypto.randomUUID(), cooperativa_id: c.id, nombre, unidad, activo: true };
     this.insumos.push(i);
     return i;
   }
@@ -87,6 +90,7 @@ export class MockSupabase {
     const ra = this._ranchosAdmin(uid);
     if (tabla === 'insumos') { const cs = this._coopsVisibles(uid, mis); filas = this.insumos.filter((i) => cs.has(i.cooperativa_id)); }
     else if (tabla === 'cooperativas') { const cs = this._coopsVisibles(uid, mis); filas = this.cooperativas.filter((c) => cs.has(c.id)); }
+    else if (tabla === 'estimacion_insumo_rancho') { const mios = new Set(this.membresias.filter((m) => m.user_id === uid && m.activo && (m.rol === 'dueno' || m.rol === 'mvz')).map((m) => m.rancho_id)); filas = this.estimaciones.filter((e) => mios.has(e.rancho_id)); }
     else if (tabla === 'ranchos') filas = this.ranchos.filter((r) => mis.has(r.id) || ra.has(r.id)).map((r) => ({ id: r.id, nombre: r.nombre }));
     else if (tabla === 'ordenes_consolidadas') { const cs = this._coopsAdmin(uid); filas = this.ordenes.filter((o) => cs.has(o.cooperativa_id)); }
     else if (tabla === 'solicitudes_insumo') {
@@ -113,20 +117,20 @@ export class MockSupabase {
       const ins = this.insumos.find((i) => i.id === body.insumo_id && i.activo);
       if (!m || !ins || ins.cooperativa_id !== this._coopDeRancho(body.rancho_id) || body.creado_por !== uid) return this._json(403, { code: '42501', message: 'new row violates row-level security policy for table "solicitudes_insumo"' });
       if (!Number.isInteger(body.cantidad) || body.cantidad < 1) return this._json(400, { code: '23514', message: 'check constraint' });
-      this.solicitudes.push({ id: body.id, rancho_id: body.rancho_id, insumo_id: body.insumo_id, cantidad: body.cantidad, nota: body.nota ?? null, estado: 'pendiente', orden_id: null, cantidad_asignada: null, creado_por: uid, creado_en: this.marca() });
+      this.solicitudes.push({ id: body.id, rancho_id: body.rancho_id, insumo_id: body.insumo_id, cantidad: body.cantidad, nota: body.nota ?? null, estado: 'pendiente', orden_id: null, cantidad_asignada: null, origen_solicitud_id: null, creado_por: uid, creado_en: this.marca() });
       return { status: 201, body: '' };
     }
     if (tabla === 'insumos') {
       if (!this._coopsAdmin(uid).has(body.cooperativa_id)) return this._json(403, { code: '42501', message: 'new row violates row-level security policy for table "insumos"' });
       if (this.insumos.some((i) => i.cooperativa_id === body.cooperativa_id && i.nombre === body.nombre)) return this._json(409, { code: '23505', message: 'duplicate key' });
-      this.insumos.push({ id: crypto.randomUUID(), cooperativa_id: body.cooperativa_id, nombre: body.nombre, unidad: body.unidad, activo: true, estimar_base: 'ninguna', estimar_factor: 0 });
+      this.insumos.push({ id: crypto.randomUUID(), cooperativa_id: body.cooperativa_id, nombre: body.nombre, unidad: body.unidad, activo: true });
       return { status: 201, body: '' };
     }
     if (tabla === 'rpc/consolidar_solicitudes') {
       if (!this._coopsAdmin(uid).has(body.p_cooperativa)) return this._json(403, { code: '42501', message: 'No eres administrador de esta cooperativa' });
       const objetivo = this.solicitudes.filter((s) => s.estado === 'pendiente' && this._coopDeRancho(s.rancho_id) === body.p_cooperativa && (!body.p_insumo_ids || body.p_insumo_ids.includes(s.insumo_id)));
       if (!objetivo.length) return this._json(404, { code: 'P0002', message: 'No hay solicitudes pendientes para consolidar' });
-      const o = { id: crypto.randomUUID(), codigo: `CC-2026-${String(++this.seqOrden).padStart(4, '0')}`, cooperativa_id: body.p_cooperativa, destinatario_tipo: body.p_tipo, destinatario: body.p_destinatario, nota: body.p_nota ?? null, estado: 'borrador', creada_por: uid, creada_en: this.marca() };
+      const o = { id: crypto.randomUUID(), codigo: `CC-2026-${String(++this.seqOrden).padStart(4, '0')}`, cooperativa_id: body.p_cooperativa, destinatario_tipo: body.p_tipo, destinatario: body.p_destinatario, nota: body.p_nota ?? null, estado: 'borrador', creada_por: uid, creada_en: this.marca(), origen_orden_id: null, pendiente: null, pendiente_orden_id: null };
       this.ordenes.push(o);
       for (const s of objetivo) { s.estado = 'consolidada'; s.orden_id = o.id; }
       const ranchosOrden = [...new Set(objetivo.map((s) => s.rancho_id))].map((id) => this.ranchos.find((r) => r.id === id)).sort((a, b) => a.nombre.localeCompare(b.nombre));
@@ -139,12 +143,30 @@ export class MockSupabase {
       const c = this.cooperativas.find((x) => x.id === body.p_coop); c.corte_dia = body.p_dia; c.corte_hora = body.p_hora;
       return { status: 204, body: '' };
     }
-    if (tabla === 'rpc/configurar_estimacion') {
-      const i = this.insumos.find((x) => x.id === body.p_insumo);
-      if (!i || !this._coopsAdmin(uid).has(i.cooperativa_id)) return this._json(403, { code: '42501', message: 'No eres administrador de esta cooperativa' });
-      if (!['ninguna', 'servicio', 'diagnostico'].includes(body.p_base) || typeof body.p_factor !== 'number' || body.p_factor < 0 || body.p_factor > 1000) return this._json(400, { code: 'P0001', message: 'Base o factor de estimación inválidos' });
-      i.estimar_base = body.p_base; i.estimar_factor = body.p_factor;
+    if (tabla === 'rpc/guardar_estimacion') {
+      const ok = this.membresias.some((m) => m.user_id === uid && m.rancho_id === body.p_rancho && m.activo && (m.rol === 'dueno' || m.rol === 'mvz'));
+      if (!ok) return this._json(403, { code: '42501', message: 'Solo el dueño o el veterinario de este rancho puede cambiar su estimación' });
+      if (!['ninguna', 'servicio', 'diagnostico'].includes(body.p_base) || typeof body.p_factor !== 'number' || body.p_factor < 0 || body.p_factor > 1000) return this._json(400, { code: 'P0001', message: 'Base o cantidad por vaca inválidas' });
+      const f = this.estimaciones.find((e) => e.rancho_id === body.p_rancho && e.insumo_id === body.p_insumo);
+      if (f) { f.base = body.p_base; f.factor = body.p_factor; } else this.estimaciones.push({ rancho_id: body.p_rancho, insumo_id: body.p_insumo, base: body.p_base, factor: body.p_factor });
       return { status: 204, body: '' };
+    }
+    if (tabla === 'rpc/generar_orden_pendiente' || tabla === 'rpc/cerrar_pendiente') {
+      const o = this.ordenes.find((x) => x.id === body.p_orden);
+      if (!o || !this._coopsAdmin(uid).has(o.cooperativa_id)) return this._json(403, { code: '42501', message: 'No eres administrador de esta cooperativa' });
+      if (o.estado !== 'recibida') return this._json(400, { code: 'P0001', message: 'Primero registra la recepción de la compra' });
+      if (o.pendiente) return this._json(400, { code: 'P0001', message: 'Lo pendiente de esta compra ya se atendió' });
+      const faltan = this.solicitudes.filter((s) => s.orden_id === o.id && s.cantidad_asignada !== null && s.cantidad_asignada < s.cantidad);
+      if (!faltan.length) return this._json(400, { code: 'P0001', message: 'No hay nada pendiente en esta compra' });
+      if (tabla === 'rpc/cerrar_pendiente') { o.pendiente = 'cerrada'; return { status: 204, body: '' }; }
+      const n = { id: crypto.randomUUID(), codigo: `CC-2026-${String(++this.seqOrden).padStart(4, '0')}`, cooperativa_id: o.cooperativa_id, destinatario_tipo: o.destinatario_tipo, destinatario: o.destinatario, nota: `Pendiente de ${o.codigo}`, estado: 'borrador', creada_por: uid, creada_en: this.marca(), origen_orden_id: o.id, pendiente: null, pendiente_orden_id: null };
+      this.ordenes.push(n);
+      const nuevas = faltan.map((s) => ({ id: crypto.randomUUID(), rancho_id: s.rancho_id, insumo_id: s.insumo_id, cantidad: s.cantidad - s.cantidad_asignada, nota: `Pendiente de ${o.codigo}`, estado: 'consolidada', orden_id: n.id, cantidad_asignada: null, origen_solicitud_id: s.id, creado_por: s.creado_por, creado_en: s.creado_en }));
+      this.solicitudes.push(...nuevas);
+      const ranchosN = [...new Set(nuevas.map((s) => s.rancho_id))].map((id) => this.ranchos.find((r) => r.id === id)).sort((a, b) => a.nombre.localeCompare(b.nombre));
+      ranchosN.forEach((r, i) => this.entregas.push({ id: crypto.randomUUID(), orden_id: n.id, rancho_id: r.id, codigo: `${n.codigo}-${String(i + 1).padStart(2, '0')}`, estado: 'por_entregar' }));
+      o.pendiente = 'repuesta'; o.pendiente_orden_id = n.id;
+      return this._json(200, n.id);
     }
     if (tabla === 'rpc/recibir_orden') {
       const o = this.ordenes.find((x) => x.id === body.p_orden);

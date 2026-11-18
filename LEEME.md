@@ -103,10 +103,10 @@ Se ajustan en `UMBRALES` y `PARAMS` de `lib.js`.
 - **Corte**: la cooperativa define día y hora (por defecto miércoles 18:00, solo un valor inicial) en Panel de la asociación → "Corte semanal" (RPC `configurar_corte`, solo admin). Se calcula con la hora del dispositivo.
 - **Rancho**: ve "Corte semanal: … · faltan N" al pedir insumos. Lo pedido antes entra a la compra de la semana; después, a la siguiente.
 - **Admin**: ve el próximo corte y cuántas solicitudes pendientes llegaron *antes del último corte* y siguen sin consolidar. La consolidación sigue siendo manual y revisada; nada se compra solo.
-- **Sugerencia semanal**: por insumo, el admin elige la base ("Vacas por servir" o "Vacas por diagnosticar") y la cantidad por vaca (RPC `configurar_estimacion`). El rancho ve `ceil(vacas × factor)` para los próximos 7 días, descuenta lo ya pedido en el ciclo (acumulado) y el botón "Pedir N" solo precarga el formulario.
+- **Sugerencia semanal**: por insumo, **cada rancho** (dueño o MVZ) elige la base ("Vacas por servir" o "Vacas por diagnosticar") y la cantidad por vaca en "Mi estimación semanal" (tabla `estimacion_insumo_rancho`, RPC `guardar_estimacion`). La asociación no la ve ni la cambia (RLS). El rancho ve `ceil(vacas × factor)` para los próximos 7 días, descuenta lo ya pedido en el ciclo (acumulado) y el botón "Pedir N" solo precarga el formulario.
   - Por servir: vacas en celo, abiertas, listas, o posparto que estarán listas en ≤ 7 días (cota superior: no todas se servirán).
   - Por diagnosticar: vacas que ya tocan diagnóstico o lo cumplirán en ≤ 7 días.
-- **Límites**: los factores NO están validados (los fija el MVZ/cooperativa; por defecto 0 = no sugiere). Solo cubre insumos ligados a eventos reproductivos. Si el rancho no registra, la estimación sale baja (la app lo avisa si el último dato tiene más de 14 días). Un solo corte para toda la cooperativa. Sin aviso por WhatsApp (depende del canal).
+- **Límites**: los factores NO están validados (los fija cada rancho; sin configurar = no sugiere). Pendiente: las columnas viejas `insumos.estimar_*` y la función `configurar_estimacion` siguen en la BD (la app ya no las usa). Solo cubre insumos ligados a eventos reproductivos. Si el rancho no registra, la estimación sale baja (la app lo avisa si el último dato tiene más de 14 días). Un solo corte para toda la cooperativa. Sin aviso por WhatsApp (depende del canal).
 
 ## Selección en cuadros (teléfono)
 
@@ -134,3 +134,9 @@ Se ajustan en `UMBRALES` y `PARAMS` de `lib.js`.
 La app vive en la **raíz** del repositorio (GitHub Pages sirve la raíz). No poner la app en una subcarpeta `app/`: el sitio no la vería. Las pruebas (`test/`) funcionan desde la raíz: `cd test && node --test` y `python3 test/e2e_paneles.py`.
 
 - **Mis vacas** (todas las vacas del rancho) ahora se ve igual que "Por atender": cuadros agrupados por estado, primero lo que hay que ver (diagnóstico, parto próximo, celo, vacías, listas) y luego servidas, posparto, gestantes, sin datos y descartadas. El buscador filtra dentro de los grupos y el botón de regreso de la ficha vuelve a esta lista.
+
+
+## Lo que faltó por llegar
+- Si en la recepción llegó menos de lo pedido, la tarjeta de la compra muestra "Falta por llegar" con dos acciones del admin: **Generar compra con lo pendiente** (RPC `generar_orden_pendiente`: crea una compra nueva en borrador, con su código y entregas por rancho, marcada "Procede de CC-…") o **Cerrar sin reponer** (`cerrar_pendiente`).
+- La original queda marcada (repuesta / cerrada) y ya no ofrece generarlo otra vez. El ranchero ve en su entrega "Faltaron N: los recibirás en CC-…-NN" y en la nueva "Procede de una entrega anterior". Lo repuesto no cuenta como pedido nuevo en el acumulado del ciclo.
+- Límite: cancelar una compra consolidada sigue sin definirse.

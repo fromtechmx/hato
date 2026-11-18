@@ -116,3 +116,13 @@ test('acumuladoCiclo: suma desde el último corte, incluye consolidadas, excluye
   const despues = acumuladoCiclo(s, L(2026, 11, 18, 18, 1), 3, 18);
   assert.equal(despues.size, 0);
 });
+
+
+test('acumuladoCiclo: lo repuesto de una compra anterior (origen_solicitud_id) no cuenta como pedido nuevo', () => {
+  const ahora = new Date(2026, 10, 18, 10, 0);
+  const sol = [
+    { insumo_id: 'a', cantidad: 5, estado: 'pendiente', creado_en: new Date(2026, 10, 17, 9, 0).toISOString() },
+    { insumo_id: 'a', cantidad: 3, estado: 'consolidada', origen_solicitud_id: 'x', creado_en: new Date(2026, 10, 17, 9, 0).toISOString() },
+  ];
+  assert.equal(acumuladoCiclo(sol, ahora, 3, '18:00').get('a'), 5);
+});

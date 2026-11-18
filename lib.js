@@ -386,7 +386,7 @@ export function acumuladoCiclo(solicitudes, ahora, dia, hora) {
   const { ultimo } = cortesAlrededor(ahora, dia, hora);
   const out = new Map();
   for (const s of solicitudes) {
-    if (s.estado === 'cancelada') continue;
+    if (s.estado === 'cancelada' || s.origen_solicitud_id) continue; // lo repuesto de una compra anterior no es un pedido nuevo
     if (new Date(s.creado_en).getTime() < ultimo.getTime()) continue;
     out.set(s.insumo_id, (out.get(s.insumo_id) || 0) + s.cantidad);
   }

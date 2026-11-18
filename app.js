@@ -571,7 +571,7 @@ function msgError(e) {
 }
 
 async function abrirInsumos() {
-  S.ped = { cargando: true, error: null, formError: null, corte: null, insumos: [], solicitudes: [], entregas: [], form: { insumo_id: '', cantidad: '', nota: '' } };
+  S.ped = { cargando: true, error: null, formError: null, corte: null, estim: new Map(), configAbierta: false, estError: null, insumos: [], solicitudes: [], entregas: [], form: { insumo_id: '', cantidad: '', nota: '' } };
   ir('insumos');
   await cargarInsumos();
 }
@@ -579,12 +579,14 @@ async function abrirInsumos() {
 async function cargarInsumos() {
   try {
     const rid = encodeURIComponent(S.rancho.id);
-    const [ins, sol, ent, coop] = await Promise.all([
-      api.rest('GET', '/insumos?select=id,nombre,unidad,estimar_base,estimar_factor&activo=eq.true&order=nombre.asc'),
-      api.rest('GET', `/solicitudes_insumo?rancho_id=eq.${rid}&select=id,cantidad,cantidad_asignada,estado,nota,creado_en,orden_id,insumo_id,insumo:insumos(nombre,unidad)&order=creado_en.desc&limit=100`),
+    const [ins, sol, ent, coop, est] = await Promise.all([
+      api.rest('GET', '/insumos?select=id,nombre,unidad&activo=eq.true&order=nombre.asc'),
+      api.rest('GET', `/solicitudes_insumo?rancho_id=eq.${rid}&select=id,cantidad,cantidad_asignada,estado,nota,creado_en,orden_id,insumo_id,origen_solicitud_id,insumo:insumos(nombre,unidad)&order=creado_en.desc&limit=100`),
       api.rest('GET', `/entregas?rancho_id=eq.${rid}&select=id,orden_id,codigo,estado&order=codigo.desc&limit=50`),
       api.rest('GET', '/cooperativas?select=id,nombre,corte_dia,corte_hora&order=nombre.asc&limit=1'),
+      api.rest('GET', `/estimacion_insumo_rancho?rancho_id=eq.${rid}&select=insumo_id,base,factor`),
     ]);
+    S.ped.estim = new Map((est || []).map((x) => [x.insumo_id, { base: x.base, factor: Number(x.factor) }]));
     S.ped.corte = coop && coop[0] ? { dia: coop[0].corte_dia, hora: coop[0].corte_hora } : null;
     S.ped.insumos = ins || [];
     S.ped.solicitudes = sol || [];
@@ -611,8 +613,13 @@ function entregasRancho() {
       if (s.cantidad_asignada !== null && s.cantidad_asignada !== undefined) { l.asignada += s.cantidad_asignada; l.ok = true; }
       lineas.set(k, l);
     }
+    const mias = P.solicitudes.filter((s) => s.orden_id === e.orden_id);
+    const hijas = P.solicitudes.filter((s) => mias.some((m) => m.id === s.origen_solicitud_id));
+    const entregaHija = hijas.length ? P.entregas.find((x) => x.orden_id === hijas[0].orden_id) : null;
+    const nota = mias.some((s) => s.origen_solicitud_id) ? '<div class="suave" style="margin-top:4px"><b>Procede de una entrega anterior:</b> es lo que faltó por llegar.</div>'
+      : hijas.length ? `<div class="suave" style="margin-top:4px"><b>Faltaron ${esc(hijas.reduce((t, s) => t + s.cantidad, 0))}</b> en esta entrega${entregaHija ? `; los recibirás en <b>${esc(entregaHija.codigo)}</b>` : ''}.</div>` : '';
     return `<div class="ev"><div class="fila"><b>${esc(e.codigo)}</b><span class="estado ${cls}">${esc(txt)}</span></div>
-      <span class="suave">${[...lineas.values()].map((l) => `${esc(l.nombre)}: ${l.ok ? `${esc(l.asignada)} de ${esc(l.pedida)} pedidas` : `${esc(l.pedida)} pedidas`} ${esc(l.unidad)}`).join(' · ')}</span>
+      <span class="suave">${[...lineas.values()].map((l) => `${esc(l.nombre)}: ${l.ok ? `${esc(l.asignada)} de ${esc(l.pedida)} pedidas` : `${esc(l.pedida)} pedidas`} ${esc(l.unidad)}`).join(' · ')}</span>${nota}
       ${e.estado === 'entregada' ? `<div><button class="btn chico primario" style="margin-top:6px" data-accion="entrega-confirmar" data-id="${esc(e.id)}">Confirmar que lo recibí</button></div>` : ''}</div>`;
   }).join('')}</div>`;
 }
@@ -631,6 +638,41 @@ function bloqueCorte(corte) {
   return `<div class="aviso warn"><b>Corte semanal: ${esc(textoCorte(corte.dia, corte.hora))}</b> · ${esc(textoFalta(ahora, proximo))}.<br><span class="suave">Lo que pidas antes entra a la compra de esta semana. Lo que pidas después, a la siguiente.</span></div>`;
 }
 
+const BASES_EST = { ninguna: 'No estimar', servicio: 'Vacas por servir', diagnostico: 'Vacas por diagnosticar' };
+
+function tarjetaMiEstimacion(hayConfig) {
+  const P = S.ped;
+  if (!P.configAbierta) {
+    return `<div class="card"><b>Mi estimación semanal</b>
+      <p class="suave" style="margin:4px 0 8px">${hayConfig ? 'Tú decides cuánto usas por vaca. Tu cooperativa no la ve ni la cambia.' : 'Aún no hay sugerencias porque no has dicho cuánto usas por vaca. Tú decides: tu cooperativa no la ve ni la cambia.'}</p>
+      <button class="btn chico" style="margin:0" data-accion="est-abrir">${hayConfig ? 'Cambiar mi estimación' : 'Configurar mi estimación'}</button></div>`;
+  }
+  return `<div class="card"><b>Mi estimación semanal</b>
+    <p class="suave" style="margin:4px 0 8px">Para cada insumo elige sobre qué vacas se calcula y cuánto usas por vaca. Solo tú (dueño o veterinario de este rancho) la ves y la cambias. Es una guía, no pide nada por sí sola.</p>
+    ${P.estError ? `<div class="aviso mal">${esc(P.estError)}</div>` : ''}
+    ${P.insumos.map((i) => { const m = P.estim.get(i.id) || { base: 'ninguna', factor: 0 }; return `<div class="ev"><b>${esc(i.nombre)}</b> <span class="suave">· ${esc(i.unidad)}</span>
+      <label for="eb-${esc(i.id)}">Se calcula sobre</label>
+      <select id="eb-${esc(i.id)}" class="campo">${Object.entries(BASES_EST).map(([k, v]) => `<option value="${k}" ${m.base === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+      <label for="ef-${esc(i.id)}">Cantidad por vaca</label>
+      <input id="ef-${esc(i.id)}" type="text" inputmode="decimal" value="${esc(m.factor)}">
+      <button class="btn chico" style="margin-top:6px" data-accion="est-guardar" data-id="${esc(i.id)}">Guardar</button></div>`; }).join('')}
+    <button class="btn" style="margin:10px 0 0" data-accion="est-cerrar">Listo</button></div>`;
+}
+
+async function guardarEstimacion(id) {
+  const base = document.getElementById(`eb-${id}`).value;
+  const txt = document.getElementById(`ef-${id}`).value.trim().replace(',', '.');
+  const factor = Number(txt);
+  if (txt === '' || !Number.isFinite(factor) || factor < 0 || factor > 1000) { S.ped.estError = 'Escribe una cantidad por vaca entre 0 y 1000.'; render(); return; }
+  try {
+    await api.rest('POST', '/rpc/guardar_estimacion', { p_rancho: S.rancho.id, p_insumo: id, p_base: base, p_factor: factor });
+    S.ped.estim.set(id, { base, factor });
+    S.ped.estError = null;
+    toast('Estimación guardada');
+    render();
+  } catch (e) { S.ped.estError = msgError(e); render(); }
+}
+
 function sugerenciaRancho() {
   const P = S.ped;
   if (!P || !S.animales) return '';
@@ -639,12 +681,14 @@ function sugerenciaRancho() {
   let acumulado;
   if (P.corte) acumulado = acumuladoCiclo(P.solicitudes, ahora, P.corte.dia, P.corte.hora);
   else { acumulado = new Map(); for (const x of P.solicitudes) if (x.estado === 'pendiente') acumulado.set(x.insumo_id, (acumulado.get(x.insumo_id) || 0) + x.cantidad); }
-  const sug = necesidadSemana(S.animales, S.eventos, hoyLocal(), P.insumos, acumulado);
+  const insumosEst = P.insumos.map((i) => { const m = P.estim.get(i.id); return { ...i, estimar_base: m ? m.base : 'ninguna', estimar_factor: m ? m.factor : 0 }; });
+  const sug = necesidadSemana(S.animales, S.eventos, hoyLocal(), insumosEst, acumulado);
+  const hayConfig = insumosEst.some((i) => i.estimar_base !== 'ninguna' && i.estimar_factor > 0);
   const ult = resumenRancho(S.animales, S.eventos, hoyLocal());
   const sinDatos = ult.diasSinDatos !== null && ult.diasSinDatos > UMBRALES.diasSinDatos;
   const desde = P.corte ? cortesAlrededor(ahora, P.corte.dia, P.corte.hora).ultimo : null;
   const tarjetaSug = sug.length ? `<div class="card"><b>Lo que podrías necesitar esta semana</b>
-    <p class="suave" style="margin:4px 0 8px">Estimación según tus vacas y los factores de tu cooperativa. Es una guía: tú decides cuánto pedir.${sinDatos ? ` <b>Ojo: tu último registro tiene ${esc(ult.diasSinDatos)} días; la estimación puede estar baja.</b>` : ''}</p>
+    <p class="suave" style="margin:4px 0 8px">Estimación según tus vacas y la cantidad por vaca que tú configuraste. Es una guía: tú decides cuánto pedir.${sinDatos ? ` <b>Ojo: tu último registro tiene ${esc(ult.diasSinDatos)} días; la estimación puede estar baja.</b>` : ''}</p>
     ${sug.map((x) => `<div class="ev"><div class="fila"><b>${esc(x.nombre)}: ${esc(x.sugerida)} ${esc(x.unidad)}</b></div>
       <span class="suave">${esc(x.vacas)} ${x.base === 'servicio' ? 'vacas por servir' : 'vacas por diagnosticar'} × ${esc(x.factor)} · ya pediste ${esc(x.ya)} en este ciclo</span>
       ${x.faltante > 0 ? `<div><button class="btn chico" style="margin-top:6px" data-accion="sug-usar" data-id="${esc(x.insumo_id)}" data-cant="${esc(x.faltante)}">Pedir ${esc(x.faltante)} (lo que falta)</button></div>` : '<div class="suave" style="margin-top:4px">Ya cubierto con lo que pediste.</div>'}</div>`).join('')}</div>` : '';
@@ -652,7 +696,8 @@ function sugerenciaRancho() {
   const tarjetaAcum = P.corte ? `<div class="card"><b>Acumulado de este ciclo</b>
     <p class="suave" style="margin:4px 0 8px">Lo que has pedido desde el último corte (${esc(fechaCorta(hoyLocalDe(desde)))} ${esc(String(P.corte.hora).padStart(2, '0'))}:00), ya sea pendiente o incluido en una compra.</p>
     ${filas.length ? filas.map((f) => `<div class="fila" style="padding:6px 0;border-top:1px solid var(--linea)"><span>${esc(f.nombre)}</span><b>${esc(f.n)} ${esc(f.unidad)}</b></div>`).join('') : '<p class="suave" style="margin:0">Todavía no has pedido nada en este ciclo.</p>'}</div>` : '';
-  return tarjetaSug + tarjetaAcum;
+  const tarjetaConfig = tarjetaMiEstimacion(hayConfig);
+  return tarjetaSug + tarjetaAcum + tarjetaConfig;
 }
 
 function hoyLocalDe(d) { return hoyLocal(d); }
@@ -726,10 +771,10 @@ async function abrirAsoc() {
 async function cargarAsoc() {
   try {
     const [sol, ins, ran, ord, ent, rec, coop] = await Promise.all([
-      api.rest('GET', '/solicitudes_insumo?select=id,rancho_id,insumo_id,cantidad,cantidad_asignada,estado,orden_id,creado_en&order=creado_en.desc&limit=1000'),
-      api.rest('GET', '/insumos?select=id,nombre,unidad,activo,estimar_base,estimar_factor&order=nombre.asc'),
+      api.rest('GET', '/solicitudes_insumo?select=id,rancho_id,insumo_id,cantidad,cantidad_asignada,estado,orden_id,origen_solicitud_id,creado_en&order=creado_en.desc&limit=1000'),
+      api.rest('GET', '/insumos?select=id,nombre,unidad,activo&order=nombre.asc'),
       api.rest('GET', '/ranchos?select=id,nombre'),
-      api.rest('GET', '/ordenes_consolidadas?select=id,codigo,destinatario_tipo,destinatario,nota,estado,creada_en&order=creada_en.desc&limit=30'),
+      api.rest('GET', '/ordenes_consolidadas?select=id,codigo,destinatario_tipo,destinatario,nota,estado,creada_en,origen_orden_id,pendiente,pendiente_orden_id&order=creada_en.desc&limit=30'),
       api.rest('GET', '/entregas?select=id,orden_id,rancho_id,codigo,estado&order=codigo.asc&limit=500'),
       api.rest('GET', '/orden_recepciones?select=orden_id,insumo_id,cantidad_solicitada,cantidad_recibida&limit=500'),
       api.rest('GET', `/cooperativas?id=eq.${encodeURIComponent(S.asoc.coop.id)}&select=id,corte_dia,corte_hora`),
@@ -807,6 +852,25 @@ function tarjetaOrden(o) {
       <button class="btn primario" style="margin-top:12px" data-accion="recep-confirmar" data-id="${esc(o.id)}">Registrar recepción y repartir</button>
       <button class="btn" data-accion="recep-cancelar">Cancelar</button></div>`;
   }
+  const codigoDe = (id) => { const x = A.ordenes.find((q) => q.id === id); return x ? x.codigo : 'otra compra'; };
+  const origen = o.origen_orden_id ? `<div class="aviso info" style="margin-top:8px">Procede de <b>${esc(codigoDe(o.origen_orden_id))}</b>: es lo que faltó por llegar de esa compra.</div>` : '';
+  let pendiente = '';
+  if (o.estado === 'recibida') {
+    const falt = new Map();
+    for (const x of A.solicitudes) {
+      if (x.orden_id !== o.id || x.cantidad_asignada === null || x.cantidad_asignada === undefined || x.cantidad_asignada >= x.cantidad) continue;
+      falt.set(x.insumo_id, (falt.get(x.insumo_id) || 0) + (x.cantidad - x.cantidad_asignada));
+    }
+    if (falt.size) {
+      const lista = [...falt.entries()].map(([id, n]) => { const i = A.insumos.find((q) => q.id === id) || { nombre: 'Insumo', unidad: '' }; return `${esc(i.nombre)}: ${esc(n)} ${esc(i.unidad)}`; }).join(' · ');
+      if (!o.pendiente) pendiente = `<div class="card" style="margin-top:8px"><b>Falta por llegar</b><p style="margin:6px 0">${lista}</p>
+        <p class="suave" style="margin:0 0 8px">Puedes pedir lo que faltó en una compra nueva (con su propio código y entregas por rancho, marcada como procedente de ${esc(o.codigo)}) o cerrarlo sin reponer.</p>
+        <button class="btn primario" style="margin:0 0 8px" data-accion="pend-generar" data-id="${esc(o.id)}">Generar compra con lo pendiente</button>
+        <button class="btn chico" style="margin:0" data-accion="pend-cerrar" data-id="${esc(o.id)}">Cerrar sin reponer</button></div>`;
+      else if (o.pendiente === 'repuesta') pendiente = `<div class="aviso info" style="margin-top:8px">Lo que faltó (${lista}) se pidió en <b>${esc(codigoDe(o.pendiente_orden_id))}</b>.</div>`;
+      else pendiente = `<div class="aviso" style="margin-top:8px">Lo que faltó (${lista}) se cerró sin reponer.</div>`;
+    }
+  }
   let reparto = '';
   if (o.estado === 'recibida') {
     const rec = (A.recepciones || []).filter((r) => r.orden_id === o.id);
@@ -829,7 +893,7 @@ function tarjetaOrden(o) {
     <span class="suave">${esc(fechaCorta(String(o.creada_en).slice(0, 10)))}${o.nota ? ` · ${esc(o.nota)}` : ''}</span>
     <div>${items.map((i) => `${esc(i.nombre)}: ${esc(i.total)} ${esc(i.unidad)}`).join('<br>')}</div>
     <div style="margin-top:6px"><button class="btn chico" data-accion="orden-copiar" data-id="${esc(o.id)}">Copiar texto</button>${accion}</div>
-    ${recepcion}${reparto}</div>`;
+    ${origen}${recepcion}${reparto}${pendiente}</div>`;
 }
 
 function tarjetaCorte() {
@@ -861,17 +925,6 @@ async function guardarCorte() {
   } catch (e) { A.corteError = msgError(e); render(); }
 }
 
-async function guardarEstimacion(id) {
-  const base = document.getElementById(`eb-${id}`).value;
-  const txt = document.getElementById(`ef-${id}`).value.trim().replace(',', '.');
-  const factor = Number(txt);
-  if (txt === '' || !Number.isFinite(factor) || factor < 0 || factor > 1000) { toast('Escribe una cantidad por vaca entre 0 y 1000.'); return; }
-  try {
-    await api.rest('POST', '/rpc/configurar_estimacion', { p_insumo: id, p_base: base, p_factor: factor });
-    toast('Estimación guardada');
-    await cargarAsoc();
-  } catch (e) { toast(msgError(e)); }
-}
 
 function vistaAsoc() {
   const A = S.asoc;
@@ -882,13 +935,7 @@ function vistaAsoc() {
       <span style="flex:1"><b>${esc(g.nombre)}</b> · ${esc(g.total)} ${esc(g.unidad)}<br><span class="suave">${g.ranchos.map((r) => `${esc(r.rancho)}: ${esc(r.cantidad)}`).join(' · ')}</span></span></label>`).join('');
   const f = A.form;
   const ordenes = A.ordenes.map((o) => tarjetaOrden(o)).join('');
-  const BASES = { ninguna: 'No estimar', servicio: 'Vacas por servir', diagnostico: 'Vacas por diagnosticar' };
-  const catalogo = A.insumos.map((i) => `<div class="ev"><span>${esc(i.nombre)}</span> <span class="suave">· ${esc(i.unidad)}${i.activo ? '' : ' · inactivo'}</span>
-      <label for="eb-${esc(i.id)}" style="margin-top:6px">Estimar por rancho (opcional)</label>
-      <select id="eb-${esc(i.id)}" class="campo">${Object.entries(BASES).map(([k, v]) => `<option value="${k}" ${(i.estimar_base || 'ninguna') === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
-      <label for="ef-${esc(i.id)}">Cantidad por vaca</label>
-      <input id="ef-${esc(i.id)}" type="text" inputmode="decimal" value="${esc(i.estimar_factor ?? 0)}">
-      <button class="btn chico" style="margin-top:6px" data-accion="est-guardar" data-id="${esc(i.id)}">Guardar estimación</button></div>`).join('');
+  const catalogo = A.insumos.map((i) => `<div class="ev"><span>${esc(i.nombre)}</span> <span class="suave">· ${esc(i.unidad)}${i.activo ? '' : ' · inactivo'}</span></div>`).join('');
   return marco(`
     <button class="atras" data-accion="ir" data-vista="inicio">‹ Inicio</button>
     <h2>Panel de la asociación</h2>
@@ -957,7 +1004,8 @@ async function copiarOrden(id) {
   if (!o) return;
   const lineas = itemsDeOrden(id).map((i) => `- ${i.nombre}: ${i.total} ${i.unidad}`);
   const ents = entregasDeOrden(id).map((e) => `${e.codigo} · ${nombreRancho(e.rancho_id)}: ${lineasDeEntrega(S.asoc.solicitudes, S.asoc.insumos, id, e.rancho_id).map((l) => `${l.nombre} ${l.asignada ?? l.pedida} ${l.unidad}`).join(', ')}`);
-  const texto = `Compra consolidada ${o.codigo || ''} · ${S.asoc.coop ? S.asoc.coop.nombre : ''}\nPara: ${o.destinatario}\n${lineas.join('\n')}${ents.length ? `\nReparto:\n${ents.join('\n')}` : ''}${o.nota ? `\nNota: ${o.nota}` : ''}`;
+  const procede = o.origen_orden_id ? `\nProcede de ${(S.asoc.ordenes.find((q) => q.id === o.origen_orden_id) || {}).codigo || 'otra compra'} (lo que faltó por llegar)` : '';
+  const texto = `Compra consolidada ${o.codigo || ''} · ${S.asoc.coop ? S.asoc.coop.nombre : ''}${procede}\nPara: ${o.destinatario}\n${lineas.join('\n')}${ents.length ? `\nReparto:\n${ents.join('\n')}` : ''}${o.nota ? `\nNota: ${o.nota}` : ''}`;
   try { await navigator.clipboard.writeText(texto); toast('Texto copiado'); } catch { window.prompt('Copia este texto:', texto); }
 }
 
@@ -984,6 +1032,24 @@ async function confirmarRecepcion(ordenId) {
     toast('Recepción registrada y repartida');
     await cargarAsoc();
   } catch (e) { R.error = msgError(e); render(); }
+}
+
+async function generarPendiente(id) {
+  const o = S.asoc.ordenes.find((x) => x.id === id);
+  if (!window.confirm(`Se creará una compra nueva con lo que faltó de ${o ? o.codigo : 'esta compra'}, con su propio código y entregas por rancho. No se puede deshacer desde aquí. ¿Continuar?`)) return;
+  try {
+    const nueva = await api.rest('POST', '/rpc/generar_orden_pendiente', { p_orden: id });
+    await cargarAsoc();
+    const n = S.asoc.ordenes.find((x) => x.id === nueva);
+    toast(`Compra ${n ? n.codigo : 'nueva'} creada con lo pendiente`);
+  } catch (e) { toast(msgError(e)); await cargarAsoc(); }
+}
+
+async function cerrarPendiente(id) {
+  if (!window.confirm('Lo que faltó por llegar se dará por cerrado y no se volverá a pedir desde aquí. ¿Continuar?')) return;
+  try { await api.rest('POST', '/rpc/cerrar_pendiente', { p_orden: id }); toast('Pendiente cerrado'); }
+  catch (e) { toast(msgError(e)); }
+  await cargarAsoc();
 }
 
 async function marcarEntrega(id) {
@@ -1050,10 +1116,14 @@ $app.addEventListener('click', async (ev) => {
     case 'sug-usar': S.ped.form.insumo_id = el.dataset.id; document.getElementById('cantidad').value = el.dataset.cant; document.getElementById('nota').value = ''; S.ped.formError = null; render(); document.getElementById('cantidad').scrollIntoView({ block: 'center' }); break;
     case 'corte-guardar': await guardarCorte(); break;
     case 'est-guardar': await guardarEstimacion(el.dataset.id); break;
+    case 'est-abrir': S.ped.configAbierta = true; S.ped.estError = null; render(); break;
+    case 'est-cerrar': S.ped.configAbierta = false; render(); break;
     case 'orden-copiar': await copiarOrden(el.dataset.id); break;
     case 'orden-recibir': abrirRecepcion(el.dataset.id); break;
     case 'recep-confirmar': await confirmarRecepcion(el.dataset.id); break;
     case 'recep-cancelar': S.asoc.recep = null; render(); break;
+    case 'pend-generar': await generarPendiente(el.dataset.id); break;
+    case 'pend-cerrar': await cerrarPendiente(el.dataset.id); break;
     case 'entrega-marcar': await marcarEntrega(el.dataset.id); break;
     case 'entrega-confirmar': await confirmarEntrega(el.dataset.id); break;
     case 'insumo-crear': await crearInsumo(); break;
