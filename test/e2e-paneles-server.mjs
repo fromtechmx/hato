@@ -63,6 +63,6 @@ http.createServer((req, res) => {
   res.writeHead(200, { ...CORS, 'content-type': 'application/json' });
   const nomI = (id) => mock.insumos.find((i) => i.id === id).nombre;
   const nomR = (id) => mock.ranchos.find((r) => r.id === id).nombre;
-  res.end(JSON.stringify({ solicitudes: mock.solicitudes.map((s) => ({ rancho: nomR(s.rancho_id), insumo: nomI(s.insumo_id), cantidad: s.cantidad, estado: s.estado, orden: !!s.orden_id })), ordenes: mock.ordenes.map((o) => ({ destinatario: o.destinatario, tipo: o.destinatario_tipo, estado: o.estado })), insumos: mock.insumos.map((i) => i.nombre) }));
+  res.end(JSON.stringify({ solicitudes: mock.solicitudes.map((s) => ({ rancho: nomR(s.rancho_id), insumo: nomI(s.insumo_id), cantidad: s.cantidad, asignada: s.cantidad_asignada, estado: s.estado, orden: !!s.orden_id })), ordenes: mock.ordenes.map((o) => ({ codigo: o.codigo, destinatario: o.destinatario, tipo: o.destinatario_tipo, estado: o.estado })), entregas: mock.entregas.map((e) => ({ codigo: e.codigo, rancho: nomR(e.rancho_id), estado: e.estado })), recepciones: mock.recepciones.map((r) => ({ insumo: nomI(r.insumo_id), solicitado: r.cantidad_solicitada, recibido: r.cantidad_recibida })), insumos: mock.insumos.map((i) => i.nombre) }));
 }).listen(4175, '127.0.0.1');
 console.log('listo');

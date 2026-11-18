@@ -87,3 +87,48 @@ test('validar solicitud', () => {
   for (const c of [0, -1, 1.5, 'abc', '', 100001]) assert.ok(validarSolicitud({ insumo_id: 'x', cantidad: c }), String(c));
   assert.equal(validarSolicitud({ insumo_id: 'x', cantidad: '12' }), null);
 });
+
+import { repartir, lineasDeEntrega } from '../app/lib.js';
+
+const S = (id, cantidad, creado_en = '2026-11-18T10:00:00Z') => ({ id, cantidad, creado_en });
+const suma = (m) => [...m.values()].reduce((a, b) => a + b, 0);
+
+test('repartir: llegó todo o más → cada uno recibe lo pedido', () => {
+  const r = repartir([S('a', 40), S('c', 25)], 65);
+  assert.deepEqual([r.get('a'), r.get('c')], [40, 25]);
+  const m = repartir([S('a', 40), S('c', 25)], 100);
+  assert.deepEqual([m.get('a'), m.get('c')], [40, 25]); // el excedente no se reparte
+});
+
+test('repartir: llegó menos → proporcional y suma exacta (mismo resultado que la función SQL: 50 de 65 → 31 y 19)', () => {
+  const r = repartir([S('a', 40), S('c', 25)], 50);
+  assert.equal(r.get('a'), 31);
+  assert.equal(r.get('c'), 19);
+  assert.equal(suma(r), 50);
+});
+
+test('repartir: cero, empates y sumas exactas en muchos casos', () => {
+  assert.equal(suma(repartir([S('a', 5), S('b', 5)], 0)), 0);
+  const e = repartir([S('a', 5, '2026-01-01'), S('b', 5, '2026-01-02')], 5); // 2.5 y 2.5: el residuo va al más antiguo
+  assert.deepEqual([e.get('a'), e.get('b')], [3, 2]);
+  for (let rec = 0; rec < 60; rec++) {
+    const sol = [S('a', 13), S('b', 7), S('c', 29), S('d', 1)];
+    const r = repartir(sol, rec);
+    assert.equal(suma(r), Math.min(rec, 50), `rec=${rec}`);
+    for (const s of sol) assert.ok(r.get(s.id) <= s.cantidad, 'nadie recibe más de lo que pidió');
+  }
+});
+
+test('lineasDeEntrega: agrupa por insumo y distingue "sin asignar aún"', () => {
+  const ins = [{ id: 'i1', nombre: 'Pajillas', unidad: 'pajilla' }, { id: 'i2', nombre: 'Guantes', unidad: 'caja' }];
+  const sol = [
+    { orden_id: 'o1', rancho_id: 'rA', insumo_id: 'i1', cantidad: 40, cantidad_asignada: null },
+    { orden_id: 'o1', rancho_id: 'rA', insumo_id: 'i2', cantidad: 3, cantidad_asignada: null },
+    { orden_id: 'o1', rancho_id: 'rC', insumo_id: 'i1', cantidad: 25, cantidad_asignada: null },
+    { orden_id: 'o2', rancho_id: 'rA', insumo_id: 'i1', cantidad: 9, cantidad_asignada: 9 },
+  ];
+  const l = lineasDeEntrega(sol, ins, 'o1', 'rA');
+  assert.deepEqual(l, [{ nombre: 'Guantes', unidad: 'caja', pedida: 3, asignada: null }, { nombre: 'Pajillas', unidad: 'pajilla', pedida: 40, asignada: null }]);
+  const asignado = lineasDeEntrega([{ ...sol[0], cantidad_asignada: 31 }], ins, 'o1', 'rA');
+  assert.equal(asignado[0].asignada, 31);
+});

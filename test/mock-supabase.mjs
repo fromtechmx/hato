@@ -1,6 +1,8 @@
 // Supabase SIMULADO para pruebas (no es Supabase real). Imita lo que usa HATO:
 // Auth (password + refresh con rotación), PostgREST (filtros, orden, límite, on_conflict) y las reglas RLS/FK/únicos del esquema.
 
+import { repartir } from '../app/lib.js';
+
 const AHORA_BASE = Date.UTC(2026, 10, 18, 17, 0, 0);
 
 export class MockSupabase {
@@ -17,6 +19,9 @@ export class MockSupabase {
     this.insumos = [];
     this.solicitudes = [];
     this.ordenes = [];
+    this.entregas = [];
+    this.recepciones = [];
+    this.seqOrden = 0;
     this.tokens = new Map();
     this.refresh = new Map();
     this.reloj = 0;
@@ -85,7 +90,9 @@ export class MockSupabase {
     else if (tabla === 'ordenes_consolidadas') { const cs = this._coopsAdmin(uid); filas = this.ordenes.filter((o) => cs.has(o.cooperativa_id)); }
     else if (tabla === 'solicitudes_insumo') {
       filas = this.solicitudes.filter((s) => mis.has(s.rancho_id) || ra.has(s.rancho_id));
-    } else return null;
+    } else if (tabla === 'entregas') filas = this.entregas.filter((e) => mis.has(e.rancho_id) || ra.has(e.rancho_id));
+    else if (tabla === 'orden_recepciones') { const cs = this._coopsAdmin(uid); filas = this.recepciones.filter((r) => cs.has(this.ordenes.find((o) => o.id === r.orden_id).cooperativa_id)); }
+    else return null;
     filas = this._filtrar(filas, url);
     if (!filas) return this._json(400, { code: 'PGRST100', message: 'filtro no soportado' });
     if (tabla === 'solicitudes_insumo' && /insumo:insumos/.test(url.searchParams.get('select') || '')) {
@@ -105,7 +112,7 @@ export class MockSupabase {
       const ins = this.insumos.find((i) => i.id === body.insumo_id && i.activo);
       if (!m || !ins || ins.cooperativa_id !== this._coopDeRancho(body.rancho_id) || body.creado_por !== uid) return this._json(403, { code: '42501', message: 'new row violates row-level security policy for table "solicitudes_insumo"' });
       if (!Number.isInteger(body.cantidad) || body.cantidad < 1) return this._json(400, { code: '23514', message: 'check constraint' });
-      this.solicitudes.push({ id: body.id, rancho_id: body.rancho_id, insumo_id: body.insumo_id, cantidad: body.cantidad, nota: body.nota ?? null, estado: 'pendiente', orden_id: null, creado_por: uid, creado_en: this.marca() });
+      this.solicitudes.push({ id: body.id, rancho_id: body.rancho_id, insumo_id: body.insumo_id, cantidad: body.cantidad, nota: body.nota ?? null, estado: 'pendiente', orden_id: null, cantidad_asignada: null, creado_por: uid, creado_en: this.marca() });
       return { status: 201, body: '' };
     }
     if (tabla === 'insumos') {
@@ -118,10 +125,45 @@ export class MockSupabase {
       if (!this._coopsAdmin(uid).has(body.p_cooperativa)) return this._json(403, { code: '42501', message: 'No eres administrador de esta cooperativa' });
       const objetivo = this.solicitudes.filter((s) => s.estado === 'pendiente' && this._coopDeRancho(s.rancho_id) === body.p_cooperativa && (!body.p_insumo_ids || body.p_insumo_ids.includes(s.insumo_id)));
       if (!objetivo.length) return this._json(404, { code: 'P0002', message: 'No hay solicitudes pendientes para consolidar' });
-      const o = { id: crypto.randomUUID(), cooperativa_id: body.p_cooperativa, destinatario_tipo: body.p_tipo, destinatario: body.p_destinatario, nota: body.p_nota ?? null, estado: 'borrador', creada_por: uid, creada_en: this.marca() };
+      const o = { id: crypto.randomUUID(), codigo: `CC-2026-${String(++this.seqOrden).padStart(4, '0')}`, cooperativa_id: body.p_cooperativa, destinatario_tipo: body.p_tipo, destinatario: body.p_destinatario, nota: body.p_nota ?? null, estado: 'borrador', creada_por: uid, creada_en: this.marca() };
       this.ordenes.push(o);
       for (const s of objetivo) { s.estado = 'consolidada'; s.orden_id = o.id; }
+      const ranchosOrden = [...new Set(objetivo.map((s) => s.rancho_id))].map((id) => this.ranchos.find((r) => r.id === id)).sort((a, b) => a.nombre.localeCompare(b.nombre));
+      ranchosOrden.forEach((r, i) => this.entregas.push({ id: crypto.randomUUID(), orden_id: o.id, rancho_id: r.id, codigo: `${o.codigo}-${String(i + 1).padStart(2, '0')}`, estado: 'por_entregar' }));
       return this._json(200, o.id);
+    }
+    if (tabla === 'rpc/recibir_orden') {
+      const o = this.ordenes.find((x) => x.id === body.p_orden);
+      if (!o || !this._coopsAdmin(uid).has(o.cooperativa_id)) return this._json(403, { code: '42501', message: 'No eres administrador de esta cooperativa' });
+      if (o.estado !== 'enviada') return this._json(400, { code: 'P0001', message: 'La compra debe estar enviada para registrar la recepción' });
+      const sols = this.solicitudes.filter((s) => s.orden_id === o.id);
+      const insumoIds = [...new Set(sols.map((s) => s.insumo_id))];
+      for (const id of insumoIds) { const v = body.p_recibido[id]; if (!Number.isInteger(v) || v < 0) return this._json(400, { code: 'P0001', message: 'Falta o es inválida la cantidad recibida de un insumo' }); }
+      for (const id of insumoIds) {
+        const grupo = sols.filter((s) => s.insumo_id === id);
+        const r = repartir(grupo, body.p_recibido[id]);
+        for (const s of grupo) s.cantidad_asignada = r.get(s.id);
+        this.recepciones.push({ orden_id: o.id, insumo_id: id, cantidad_solicitada: grupo.reduce((t, s) => t + s.cantidad, 0), cantidad_recibida: body.p_recibido[id] });
+      }
+      o.estado = 'recibida';
+      return { status: 204, body: '' };
+    }
+    if (tabla === 'rpc/marcar_entrega') {
+      const e = this.entregas.find((x) => x.id === body.p_entrega);
+      const o = e && this.ordenes.find((x) => x.id === e.orden_id);
+      if (!o || !this._coopsAdmin(uid).has(o.cooperativa_id)) return this._json(403, { code: '42501', message: 'No eres administrador de esta cooperativa' });
+      if (o.estado !== 'recibida') return this._json(400, { code: 'P0001', message: 'Primero registra la recepción de la compra' });
+      if (e.estado !== 'por_entregar') return this._json(400, { code: 'P0001', message: 'La entrega ya fue marcada' });
+      e.estado = 'entregada';
+      return { status: 204, body: '' };
+    }
+    if (tabla === 'rpc/confirmar_entrega') {
+      const e = this.entregas.find((x) => x.id === body.p_entrega);
+      const ok = e && this.membresias.some((m) => m.user_id === uid && m.rancho_id === e.rancho_id && m.activo && (m.rol === 'dueno' || m.rol === 'mvz'));
+      if (!ok) return this._json(403, { code: '42501', message: 'No puedes confirmar esta entrega' });
+      if (e.estado !== 'entregada') return this._json(400, { code: 'P0001', message: 'La entrega aún no está marcada como entregada, o ya se confirmó' });
+      e.estado = 'confirmada';
+      return { status: 204, body: '' };
     }
     return null;
   }
@@ -137,7 +179,7 @@ export class MockSupabase {
     }
     if (tabla === 'ordenes_consolidadas') {
       const o = this.ordenes.find((x) => x.id === id && this._coopsAdmin(uid).has(x.cooperativa_id));
-      if (!o || !['borrador', 'enviada', 'recibida', 'cancelada'].includes(body.estado)) return this._json(200, []);
+      if (!o || o.estado !== 'borrador' || body.estado !== 'enviada') return this._json(200, []);
       o.estado = body.estado;
       return this._json(200, [o]);
     }

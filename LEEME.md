@@ -88,3 +88,12 @@ Se ajustan en `UMBRALES` y `PARAMS` de `lib.js`.
 - El detector de teléfonos de `zapia-spike` da falsos positivos (IPs/trace IDs); pendiente corregir.
 - Gobernanza de datos con la cooperativa y región del proyecto (us-west-2) por definir.
 - Sin edición ni borrado: se corrige con un evento `anulacion` (diseño intencional, auditable).
+
+## Compra consolidada: recepción, reparto y códigos
+
+- **Código de compra**: `CC-AAAA-NNNN` (secuencia global, año en hora de México). **Código de entrega por rancho**: `CC-AAAA-NNNN-NN`. Se crean al consolidar.
+- **Dónde se recepciona**: Panel de la asociación → compra en estado *Enviada* → "Registrar recepción". Se escribe cuánto llegó de cada insumo; la vista previa muestra qué toca a cada rancho antes de confirmar. Solo admin de la cooperativa (RPC `recibir_orden`).
+- **Regla de reparto (PROVISIONAL, validar con la cooperativa)**: si llegó ≥ lo pedido, cada rancho recibe lo que pidió y el sobrante queda en la asociación. Si llegó menos, reparto proporcional con residuo mayor (empate: solicitud más antigua).
+- **Entrega**: el admin marca "Entregada" (`marcar_entrega`); el rancho (dueño o MVZ) ve su código y "Confirmar que lo recibí" (`confirmar_entrega`). Cada rancho solo ve sus entregas.
+- Una compra solo pasa de borrador a enviada por PATCH; *recibida* solo por `recibir_orden`.
+- Pendiente: cancelar una compra consolidada (no libera las solicitudes).
