@@ -189,6 +189,8 @@ try:
         d = page.inner_text('main')
         check('Próximo corte: miércoles 18:00' in d, 'el admin ve el corte vigente (miércoles 18:00 por defecto)')
         check('antes del último corte' in d, 'avisa de solicitudes pendientes que llegaron antes del último corte')
+        check(page.locator('#corteDia').count() == 0 and 'Próximo corte' in page.inner_text('main'), 'el corte semanal está plegado: se ve el próximo corte pero no los selectores')
+        page.click('button:has-text("Cambiar día y hora")'); page.wait_for_selector('#corteDia')
         page.select_option('#corteDia', '5'); page.select_option('#corteHora', '9'); page.click('text=Guardar corte')
         page.wait_for_selector('text=Próximo corte: viernes 09:00')
         check(servidor()['cooperativa'] == {'dia': 5, 'hora': 9}, 'el corte nuevo (viernes 9:00) quedó en el servidor')

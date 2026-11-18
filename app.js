@@ -763,7 +763,7 @@ async function cancelarSolicitud(id) {
 // ---------- Panel de la asociación ----------
 
 async function abrirAsoc() {
-  S.asoc = { cargando: true, error: null, corte: null, corteError: null, coop: S.admin[0], solicitudes: [], insumos: [], ranchos: [], ordenes: [], entregas: [], recepciones: [], recep: null, form: { tipo: 'veterinario', destinatario: '', nota: '' }, formError: null, sel: null, insForm: { nombre: '', unidad: '' }, insError: null };
+  S.asoc = { cargando: true, error: null, corte: null, corteError: null, corteAbierto: false, coop: S.admin[0], solicitudes: [], insumos: [], ranchos: [], ordenes: [], entregas: [], recepciones: [], recep: null, form: { tipo: 'veterinario', destinatario: '', nota: '' }, formError: null, sel: null, insForm: { nombre: '', unidad: '' }, insError: null };
   ir('asoc');
   await cargarAsoc();
 }
@@ -908,17 +908,19 @@ function tarjetaCorte() {
   if (!A.corte) return '';
   const ahora = new Date();
   const r = resumenCorte(A.solicitudes, ahora, A.corte.dia, A.corte.hora);
+  const abierto = A.corteAbierto || !!A.corteError;
   const dias = DIAS_SEMANA.map((d, i) => `<option value="${i}" ${A.corte.dia === i ? 'selected' : ''}>${d}</option>`).join('');
   const horas = Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${A.corte.hora === h ? 'selected' : ''}>${String(h).padStart(2, '0')}:00</option>`).join('');
   return `<div class="card"><b>Corte semanal</b>
     <p style="margin:6px 0 0">Próximo corte: <b>${esc(textoCorte(A.corte.dia, A.corte.hora))}</b> · ${esc(textoFalta(ahora, r.proximo))}</p>
     <p class="suave" style="margin:4px 0 0">Pendientes recibidas después del último corte: ${esc(r.nuevas)}.</p>
     ${r.rezagadas ? `<div class="aviso warn" style="margin-top:8px">${esc(r.rezagadas)} solicitud(es) pendiente(s) llegaron <b>antes del último corte</b> y siguen sin consolidar.</div>` : ''}
-    <label for="corteDia">Cambiar día y hora del corte</label>
+    ${abierto ? `<label for="corteDia">Cambiar día y hora del corte</label>
     <select id="corteDia" class="campo">${dias}</select>
     <select id="corteHora" class="campo" style="margin-top:8px">${horas}</select>
     ${A.corteError ? `<div class="aviso mal" style="margin-top:10px">${esc(A.corteError)}</div>` : ''}
-    <button class="btn" style="margin-top:10px" data-accion="corte-guardar">Guardar corte</button></div>`;
+    <button class="btn" style="margin-top:10px" data-accion="corte-guardar">Guardar corte</button>
+    <button class="btn chico" style="margin-top:8px" data-accion="corte-toggle">Cerrar</button>` : `<button class="btn chico" style="margin-top:10px" data-accion="corte-toggle" aria-expanded="false">Cambiar día y hora ▾</button>`}</div>`;
 }
 
 async function guardarCorte() {
@@ -926,7 +928,7 @@ async function guardarCorte() {
   const dia = Number(document.getElementById('corteDia').value), hora = Number(document.getElementById('corteHora').value);
   try {
     await api.rest('POST', '/rpc/configurar_corte', { p_coop: A.coop.id, p_dia: dia, p_hora: hora });
-    A.corteError = null;
+    A.corteError = null; A.corteAbierto = false;
     toast('Corte guardado');
     await cargarAsoc();
   } catch (e) { A.corteError = msgError(e); render(); }
@@ -1123,6 +1125,7 @@ $app.addEventListener('click', async (ev) => {
     case 'sug-usar': S.ped.form.insumo_id = el.dataset.id; document.getElementById('cantidad').value = el.dataset.cant; document.getElementById('nota').value = ''; S.ped.formError = null; render(); document.getElementById('cantidad').scrollIntoView({ block: 'center' }); break;
     case 'corte-guardar': await guardarCorte(); break;
     case 'est-guardar': await guardarEstimacion(el.dataset.id); break;
+    case 'corte-toggle': S.asoc.corteAbierto = !S.asoc.corteAbierto; S.asoc.corteError = null; render(); break;
     case 'est-abrir': S.ped.configAbierta = true; S.ped.estError = null; render(); break;
     case 'est-cerrar': S.ped.configAbierta = false; render(); break;
     case 'orden-copiar': await copiarOrden(el.dataset.id); break;
