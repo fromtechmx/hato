@@ -1,6 +1,6 @@
 // HATO · app. Pantallas y flujo. Todo se guarda primero en el teléfono; se envía cuando hay conexión.
 
-import { PARAMS, TIPOS, textoTipo, uuid, hoyLocal, sumarDias, fechaCorta, normArete, validarEvento, eventosVigentes, estadoVaca, tipoSugerido, ordenarTipos, UMBRALES, resumenRancho, recomendarVisita, agruparSolicitudes, validarSolicitud } from './lib.js';
+import { PARAMS, TIPOS, textoTipo, uuid, hoyLocal, sumarDias, fechaCorta, normArete, validarEvento, eventosVigentes, estadoVaca, tipoSugerido, ordenarTipos, UMBRALES, resumenRancho, recomendarVisita, agruparSolicitudes, validarSolicitud, repartir, lineasDeEntrega, clasificarHato, cortesAlrededor, acumuladoCiclo, textoFalta, textoCorte, resumenCorte, necesidadSemana, DIAS_SEMANA } from './lib.js';
 import { openIdbStore } from './store.js';
 import { createApi } from './api.js';
 import { createSync } from './sync.js';
@@ -33,6 +33,10 @@ const S = {
   admin: [],
   panel: [],
   ped: null,
+  ordenVacas: 'numero',
+  tabAtender: 'ver',
+  grupoAtender: null,
+  fichaDesde: 'vacas',
   asoc: null,
 };
 
@@ -218,13 +222,45 @@ function listaVacas(lista) {
   }).join('');
 }
 
+function etiquetaPorVer(est) {
+  switch (est.codigo) {
+    case 'diagnosticar': return `Diag. · ${est.dias} d`;
+    case 'parto_proximo': return est.partoEsperado ? `Parto ${fechaCorta(est.partoEsperado).replace(/ \d{4}$/, '')}` : 'Parto próximo';
+    case 'abierta': case 'lista': return est.dias !== null ? `${ETIQUETA_CORTA[est.codigo]} · ${est.dias} d` : ETIQUETA_CORTA[est.codigo];
+    default: return ETIQUETA_CORTA[est.codigo] || est.texto;
+  }
+}
+
 function vistaAtender() {
-  const lista = S.animales.filter((a) => S.estados.get(a.id).alerta).sort((a, b) => S.estados.get(a.id).prioridad - S.estados.get(b.id).prioridad || a.arete.localeCompare(b.arete, 'es', { numeric: true }));
+  const C = clasificarHato(S.animales, S.eventos, hoyLocal());
+  const GR = { diagnosticar: ['diagnosticar'], parto_proximo: ['parto_proximo'], celo_abierta_lista: ['celo', 'abierta', 'lista'] };
+  const filtro = S.grupoAtender && GR[S.grupoAtender] ? GR[S.grupoAtender] : null;
+  const tab = filtro ? 'ver' : (S.tabAtender === 'sin' ? 'sin' : 'ver');
+  const gruposVista = filtro ? C.grupos.filter((g) => filtro.includes(g.codigo)) : C.grupos;
+  const nFiltro = gruposVista.reduce((n, g) => n + g.vacas.length, 0);
+  const nSin = C.sinDatos.length;
+  const botones = filtro ? `<div class="aviso info" style="display:flex;gap:10px;align-items:center;justify-content:space-between"><span>Mostrando ${esc(nFiltro)} vaca(s): ${esc(gruposVista.map((g) => g.titulo.toLowerCase()).join(', '))}</span><button class="btn chico" style="margin:0;width:auto" data-accion="atender-todas">Ver todas</button></div>` : `<div class="fila" style="gap:8px;margin:0 0 12px">
+    <button class="btn chico ${tab === 'ver' ? 'sel' : ''}" style="margin:0" data-accion="tab-atender" data-tab="ver">Por ver (${C.totalPorVer})</button>
+    <button class="btn chico ${tab === 'sin' ? 'sel' : ''}" style="margin:0" data-accion="tab-atender" data-tab="sin">Sin datos (${nSin})</button></div>`;
+  let cuerpo;
+  if (tab === 'ver') {
+    cuerpo = nFiltro || (!filtro && C.totalPorVer)
+      ? gruposVista.map((g) => `<div style="margin:14px 0 6px"><b>${esc(g.titulo)} (${g.vacas.length})</b>${g.nota ? `<span class="suave"> · ${esc(g.nota)}</span>` : ''}</div>
+          <div class="cuadros">${g.vacas.map((v) => cuadroVaca(v.a, 'ficha', etiquetaPorVer(v.est), v.dudosa)).join('')}</div>`).join('')
+        + (gruposVista.some((g) => g.vacas.some((v) => v.dudosa)) ? '<p class="suave" style="margin-top:12px">Los cuadros con borde punteado tienen un dato dudoso: míralos también en “Sin datos”.</p>' : '')
+      : '<p class="suave">Nada por ver según los registros. 🎉</p>';
+  } else {
+    cuerpo = nSin
+      ? `<p class="suave" style="margin:0 0 8px">Vacas con registros que no cuadran o sin registros. Averigua qué pasó con cada una (pregunta al encargado, revisa el corral) y regístralo; si ya no está, márcala como descarte. Más urgentes primero.</p>`
+        + C.sinDatos.map((f) => `<button class="vaca" data-accion="ficha" data-id="${esc(f.a.id)}"><div class="fila"><span class="arete">${esc(f.a.arete)}</span>${estadoChip(f.est)}</div><div class="suave">${esc(f.motivo.texto)}</div></button>`).join('')
+      : '<p class="suave">Todas las vacas tienen datos que cuadran. 👍</p>';
+  }
   return marco(`
     <button class="atras" data-accion="ir" data-vista="inicio">‹ Inicio</button>
-    <h2>Por atender (${lista.length})</h2>
-    ${lista.length ? listaVacas(lista) : '<p class="suave">Nada por atender según los registros. 🎉</p>'}
-    <p class="suave">Los avisos salen de reglas sencillas (por ejemplo, diagnóstico a los ${PARAMS.diasDiagnostico} días del servicio). Valídalas con tu veterinario.</p>`);
+    <h2>Por atender</h2>
+    ${botones}
+    ${cuerpo}
+    <p class="suave" style="margin-top:14px">Los avisos salen de reglas sencillas (por ejemplo, diagnóstico a los ${PARAMS.diasDiagnostico} días del servicio; “sin datos” = sin registros, solo notas, más de ${UMBRALES.diasSinMovimiento} días sin movimiento o parto vencido por más de ${UMBRALES.diasPartoVencido} días). Valídalas con tu veterinario.</p>`);
 }
 
 function detalleEvento(e) {
@@ -247,7 +283,7 @@ function badgeSync(o) {
 
 function vistaFicha() {
   const a = S.animales.find((x) => x.id === S.fichaId);
-  if (!a) return marco(`<button class="atras" data-accion="ir" data-vista="vacas">‹ Mis vacas</button><p>No se encontró la vaca.</p>`);
+  if (!a) return marco(`<button class="atras" data-accion="ir" data-vista="${S.fichaDesde === 'atender' ? 'atender' : 'vacas'}">‹ ${S.fichaDesde === 'atender' ? 'Por atender' : 'Mis vacas'}</button><p>No se encontró la vaca.</p>`);
   const est = S.estados.get(a.id);
   const todos = S.eventos.filter((e) => e.animal_id === a.id);
   const anulados = new Set(todos.filter((e) => e.tipo === 'anulacion' && e.anula_a).map((e) => e.anula_a));
@@ -265,7 +301,7 @@ function vistaFicha() {
     </div>`;
   }).join('');
   return marco(`
-    <button class="atras" data-accion="ir" data-vista="vacas">‹ Mis vacas</button>
+    <button class="atras" data-accion="ir" data-vista="${S.fichaDesde === 'atender' ? 'atender' : 'vacas'}">‹ ${S.fichaDesde === 'atender' ? 'Por atender' : 'Mis vacas'}</button>
     <div class="card">
       <div class="fila"><h2 style="margin:0">Vaca ${esc(a.arete)}</h2>${badgeSync(a)}</div>
       <p style="margin:10px 0 4px">${estadoChip(est)}</p>
@@ -344,7 +380,7 @@ function render() {
   if (S.cargando) { $app.innerHTML = `${cabecera()}<main><p class="suave">Descargando tus datos…</p></main>`; return; }
   if (S.vista === 'registro' && S.reg) capturarCampos();
   if (S.vista === 'asoc') capturarFormAsoc();
-  if (S.vista === 'insumos' && S.ped && document.getElementById('insumo')) S.ped.form = { insumo_id: document.getElementById('insumo').value, cantidad: document.getElementById('cantidad').value, nota: document.getElementById('nota').value };
+  if (S.vista === 'insumos' && S.ped && document.getElementById('cantidad')) S.ped.form = { insumo_id: S.ped.form.insumo_id, cantidad: document.getElementById('cantidad').value, nota: document.getElementById('nota').value };
   let html;
   switch (S.vista) {
     case 'vacas': html = vistaVacas(); break;
@@ -361,7 +397,8 @@ function render() {
   if (S.vista === 'registro' && S.reg && S.reg.paso === 1) { pintarResultados(); }
 }
 
-function ir(vista) {
+function ir(vista, conservarFiltro = false) {
+  if (vista === 'atender' && S.vista !== 'ficha' && !conservarFiltro) S.grupoAtender = null;
   S.vista = vista;
   S.aviso = null;
   if (vista !== 'vacas') S.filtro = '';
@@ -387,21 +424,28 @@ function capturarCampos() {
   }
 }
 
+const ETIQUETA_CORTA = { sin_datos: 'Sin datos', diagnosticar: 'Diagnóstico', servida: 'Servida', gestante: 'Gestante', parto_proximo: 'Parto próximo', celo: 'En celo', abierta: 'Vacía', lista: 'Lista', posparto: 'Posparto', descartada: 'Descartada', sin_estado: 'Sin estado' };
+
+function cuadroVaca(a, accion = 'elegir', etiqueta = null, dudosa = false) {
+  const est = S.estados.get(a.id);
+  const cls = (est && est.alerta ? 'alerta' : est && est.codigo === 'descartada' ? 'apagada' : '') + (dudosa ? ' dudosa' : '');
+  return `<button class="cuadro ${cls}" data-accion="${accion}" data-id="${esc(a.id)}" aria-label="Vaca ${esc(a.arete)}, ${esc(est ? est.texto : '')}${dudosa ? ', revisar el dato' : ''}"><b>${esc(a.arete)}</b><small>${esc(etiqueta || (est ? (ETIQUETA_CORTA[est.codigo] || est.texto) : ''))}</small></button>`;
+}
+
 function pintarResultados() {
   const cont = document.getElementById('resultados');
   if (!cont) return;
   const input = document.getElementById('arete');
   const q = normArete(input ? input.value : S.reg.arete);
-  if (!q) {
-    cont.innerHTML = `<p class="suave">Escribe el número de arete de la vaca.</p>`;
-    return;
-  }
-  const todas = S.animales;
-  const exacta = todas.find((a) => a.arete === q);
-  const parecidas = todas.filter((a) => a.arete !== q && a.arete.includes(q)).sort((a, b) => a.arete.localeCompare(b.arete, 'es', { numeric: true })).slice(0, 8);
-  const botones = [exacta, ...parecidas].filter(Boolean).map((a) => `<button class="vaca" data-accion="elegir" data-id="${esc(a.id)}"><div class="fila"><span class="arete">${esc(a.arete)}</span>${estadoChip(S.estados.get(a.id))}</div></button>`).join('');
-  const nueva = !exacta ? `<button class="btn" data-accion="crear-vaca">➕ Vaca nueva: ${esc(q)}</button>` : '';
-  cont.innerHTML = botones + nueva;
+  const porNumero = (x, y) => x.arete.localeCompare(y.arete, 'es', { numeric: true });
+  const orden = S.ordenVacas === 'atencion' ? (x, y) => S.estados.get(x.id).prioridad - S.estados.get(y.id).prioridad || porNumero(x, y) : porNumero;
+  const lista = S.animales.filter((a) => !q || a.arete.includes(q)).sort(orden);
+  const exacta = q && S.animales.some((a) => a.arete === q);
+  const alertas = S.animales.filter((a) => S.estados.get(a.id).alerta).length;
+  const toggle = S.animales.length > 6 ? `<div class="fila" style="gap:8px;margin:0 0 10px"><button class="btn chico ${S.ordenVacas === 'atencion' ? '' : 'sel'}" style="margin:0" data-accion="orden-vacas" data-orden="numero">Por número</button><button class="btn chico ${S.ordenVacas === 'atencion' ? 'sel' : ''}" style="margin:0" data-accion="orden-vacas" data-orden="atencion">Atención primero</button></div>` : '';
+  const nueva = q && !exacta ? `<button class="btn" style="margin-top:12px" data-accion="crear-vaca">➕ Vaca nueva: ${esc(q)}</button>` : '';
+  if (!S.animales.length) { cont.innerHTML = `<p class="suave">Aún no hay vacas. Escribe el arete para crear la primera.</p>${nueva}`; return; }
+  cont.innerHTML = `<p class="suave" style="margin:0 0 8px">${q ? `${lista.length} de ${S.animales.length} vacas` : `${S.animales.length} vacas${alertas ? ` · ${alertas} por atender` : ''}`}. Toca la vaca.</p>${toggle}${lista.length ? `<div class="cuadros">${lista.map((a) => cuadroVaca(a)).join('')}</div>` : '<p class="suave">Ninguna vaca con ese número.</p>'}${nueva}`;
 }
 
 async function crearVaca() {
@@ -478,19 +522,25 @@ function textoDato(res) {
   return `hace ${res.diasSinDatos} días`;
 }
 
+function metricaVaca(p, grupo, n, texto) {
+  if (!n) return `<div><b>${n}</b><span>${esc(texto)}</span></div>`;
+  return `<button class="metrica" data-accion="panel-grupo" data-id="${esc(p.rancho.id)}" data-grupo="${grupo}" aria-label="${esc(n)} ${esc(texto)}: ver cuáles son"><b>${n}</b><span>${esc(texto)}</span><span class="ver">Ver cuáles ›</span></button>`;
+}
+
 function vistaPanel() {
   const tarjetas = S.panel.map((p) => {
     const viejo = p.res.diasSinDatos !== null && p.res.diasSinDatos > UMBRALES.diasSinDatos;
     return `<div class="card">
       <div class="fila"><b>${esc(p.rancho.nombre)}</b><span class="estado ${claseRec(p.rec.codigo)}">${esc(p.rec.texto)}</span></div>
       <div class="metricas">
-        <div><b>${p.res.diagnosticar}</b><span>Toca diagnóstico</span></div>
-        <div><b>${p.res.partoProximo}</b><span>Parto próximo</span></div>
-        <div><b>${p.res.celo + p.res.abiertas + p.res.listas}</b><span>Celo, abiertas o listas</span></div>
+        ${metricaVaca(p, 'diagnosticar', p.res.diagnosticar, 'Toca diagnóstico')}
+        ${metricaVaca(p, 'parto_proximo', p.res.partoProximo, 'Parto próximo')}
+        ${metricaVaca(p, 'celo_abierta_lista', p.res.celo + p.res.abiertas + p.res.listas, 'Celo, abiertas o listas')}
         <div><b class="${viejo ? 'rojo' : ''}" style="font-size:18px">${esc(textoDato(p.res))}</b><span>Último dato</span></div>
       </div>
       <p class="suave" style="margin:8px 0">${esc(p.rec.motivo)}</p>
-      <button class="btn chico" data-accion="panel-abrir" data-id="${esc(p.rancho.id)}">Ver vacas</button>
+      ${p.res.sinDatosVacas ? `<p style="margin:0 0 8px;color:var(--rojo,#a32020);font-weight:700">${esc(p.res.sinDatosVacas)} vaca(s) sin datos o con datos que no cuadran</p>` : ''}
+      <button class="btn chico" data-accion="panel-abrir" data-id="${esc(p.rancho.id)}">Ver vacas por atender</button>
     </div>`;
   }).join('');
   const proximos = S.panel.filter((p) => p.res.proxima).sort((a, b) => a.res.proxima.fecha.localeCompare(b.res.proxima.fecha));
@@ -518,29 +568,96 @@ function msgError(e) {
 }
 
 async function abrirInsumos() {
-  S.ped = { cargando: true, error: null, formError: null, insumos: [], solicitudes: [], form: { insumo_id: '', cantidad: '', nota: '' } };
+  S.ped = { cargando: true, error: null, formError: null, corte: null, insumos: [], solicitudes: [], entregas: [], form: { insumo_id: '', cantidad: '', nota: '' } };
   ir('insumos');
   await cargarInsumos();
 }
 
 async function cargarInsumos() {
   try {
-    const [ins, sol] = await Promise.all([
-      api.rest('GET', '/insumos?select=id,nombre,unidad&activo=eq.true&order=nombre.asc'),
-      api.rest('GET', `/solicitudes_insumo?rancho_id=eq.${encodeURIComponent(S.rancho.id)}&select=id,cantidad,estado,nota,creado_en,insumo:insumos(nombre,unidad)&order=creado_en.desc&limit=50`),
+    const rid = encodeURIComponent(S.rancho.id);
+    const [ins, sol, ent, coop] = await Promise.all([
+      api.rest('GET', '/insumos?select=id,nombre,unidad,estimar_base,estimar_factor&activo=eq.true&order=nombre.asc'),
+      api.rest('GET', `/solicitudes_insumo?rancho_id=eq.${rid}&select=id,cantidad,cantidad_asignada,estado,nota,creado_en,orden_id,insumo_id,insumo:insumos(nombre,unidad)&order=creado_en.desc&limit=100`),
+      api.rest('GET', `/entregas?rancho_id=eq.${rid}&select=id,orden_id,codigo,estado&order=codigo.desc&limit=50`),
+      api.rest('GET', '/cooperativas?select=id,nombre,corte_dia,corte_hora&order=nombre.asc&limit=1'),
     ]);
+    S.ped.corte = coop && coop[0] ? { dia: coop[0].corte_dia, hora: coop[0].corte_hora } : null;
     S.ped.insumos = ins || [];
     S.ped.solicitudes = sol || [];
+    S.ped.entregas = ent || [];
     S.ped.error = null;
   } catch (e) { S.ped.error = msgError(e); }
   S.ped.cargando = false;
   if (S.vista === 'insumos') render();
 }
 
+const ESTADOS_ENTREGA_RANCHO = { por_entregar: ['alerta', 'En camino'], entregada: ['alerta', 'Entregada: confírmala'], confirmada: ['', 'Confirmada'] };
+
+function entregasRancho() {
+  const P = S.ped;
+  if (!P || !P.entregas || !P.entregas.length) return '';
+  return `<div class="card"><b>Entregas de compras en conjunto</b>${P.entregas.map((e) => {
+    const [cls, txt] = ESTADOS_ENTREGA_RANCHO[e.estado] || ['gris', e.estado];
+    const lineas = new Map();
+    for (const s of P.solicitudes) {
+      if (s.orden_id !== e.orden_id) continue;
+      const k = s.insumo_id;
+      const l = lineas.get(k) || { nombre: s.insumo ? s.insumo.nombre : 'Insumo', unidad: s.insumo ? s.insumo.unidad : '', pedida: 0, asignada: 0, ok: false };
+      l.pedida += s.cantidad;
+      if (s.cantidad_asignada !== null && s.cantidad_asignada !== undefined) { l.asignada += s.cantidad_asignada; l.ok = true; }
+      lineas.set(k, l);
+    }
+    return `<div class="ev"><div class="fila"><b>${esc(e.codigo)}</b><span class="estado ${cls}">${esc(txt)}</span></div>
+      <span class="suave">${[...lineas.values()].map((l) => `${esc(l.nombre)}: ${l.ok ? `${esc(l.asignada)} de ${esc(l.pedida)} pedidas` : `${esc(l.pedida)} pedidas`} ${esc(l.unidad)}`).join(' · ')}</span>
+      ${e.estado === 'entregada' ? `<div><button class="btn chico primario" style="margin-top:6px" data-accion="entrega-confirmar" data-id="${esc(e.id)}">Confirmar que lo recibí</button></div>` : ''}</div>`;
+  }).join('')}</div>`;
+}
+
+async function confirmarEntrega(id) {
+  if (!window.confirm('¿Confirmas que recibiste esta entrega?')) return;
+  try { await api.rest('POST', '/rpc/confirmar_entrega', { p_entrega: id }); toast('Entrega confirmada'); }
+  catch (e) { toast(msgError(e)); }
+  await cargarInsumos();
+}
+
+function bloqueCorte(corte) {
+  if (!corte) return '';
+  const ahora = new Date();
+  const { proximo } = cortesAlrededor(ahora, corte.dia, corte.hora);
+  return `<div class="aviso warn"><b>Corte semanal: ${esc(textoCorte(corte.dia, corte.hora))}</b> · ${esc(textoFalta(ahora, proximo))}.<br><span class="suave">Lo que pidas antes entra a la compra de esta semana. Lo que pidas después, a la siguiente.</span></div>`;
+}
+
+function sugerenciaRancho() {
+  const P = S.ped;
+  if (!P || !S.animales) return '';
+  const ahora = new Date();
+  // "ya pedido" = acumulado del ciclo (desde el último corte), pendiente o ya consolidado; sin corte configurado, solo lo pendiente
+  let acumulado;
+  if (P.corte) acumulado = acumuladoCiclo(P.solicitudes, ahora, P.corte.dia, P.corte.hora);
+  else { acumulado = new Map(); for (const x of P.solicitudes) if (x.estado === 'pendiente') acumulado.set(x.insumo_id, (acumulado.get(x.insumo_id) || 0) + x.cantidad); }
+  const sug = necesidadSemana(S.animales, S.eventos, hoyLocal(), P.insumos, acumulado);
+  const ult = resumenRancho(S.animales, S.eventos, hoyLocal());
+  const sinDatos = ult.diasSinDatos !== null && ult.diasSinDatos > UMBRALES.diasSinDatos;
+  const desde = P.corte ? cortesAlrededor(ahora, P.corte.dia, P.corte.hora).ultimo : null;
+  const tarjetaSug = sug.length ? `<div class="card"><b>Lo que podrías necesitar esta semana</b>
+    <p class="suave" style="margin:4px 0 8px">Estimación según tus vacas y los factores de tu cooperativa. Es una guía: tú decides cuánto pedir.${sinDatos ? ` <b>Ojo: tu último registro tiene ${esc(ult.diasSinDatos)} días; la estimación puede estar baja.</b>` : ''}</p>
+    ${sug.map((x) => `<div class="ev"><div class="fila"><b>${esc(x.nombre)}: ${esc(x.sugerida)} ${esc(x.unidad)}</b></div>
+      <span class="suave">${esc(x.vacas)} ${x.base === 'servicio' ? 'vacas por servir' : 'vacas por diagnosticar'} × ${esc(x.factor)} · ya pediste ${esc(x.ya)} en este ciclo</span>
+      ${x.faltante > 0 ? `<div><button class="btn chico" style="margin-top:6px" data-accion="sug-usar" data-id="${esc(x.insumo_id)}" data-cant="${esc(x.faltante)}">Pedir ${esc(x.faltante)} (lo que falta)</button></div>` : '<div class="suave" style="margin-top:4px">Ya cubierto con lo que pediste.</div>'}</div>`).join('')}</div>` : '';
+  const filas = [...acumulado.entries()].map(([id, n]) => { const i = P.insumos.find((q) => q.id === id) || { nombre: 'Insumo', unidad: '' }; return { nombre: i.nombre, unidad: i.unidad, n }; }).sort((x, y) => x.nombre.localeCompare(y.nombre, 'es'));
+  const tarjetaAcum = P.corte ? `<div class="card"><b>Acumulado de este ciclo</b>
+    <p class="suave" style="margin:4px 0 8px">Lo que has pedido desde el último corte (${esc(fechaCorta(hoyLocalDe(desde)))} ${esc(String(P.corte.hora).padStart(2, '0'))}:00), ya sea pendiente o incluido en una compra.</p>
+    ${filas.length ? filas.map((f) => `<div class="fila" style="padding:6px 0;border-top:1px solid var(--linea)"><span>${esc(f.nombre)}</span><b>${esc(f.n)} ${esc(f.unidad)}</b></div>`).join('') : '<p class="suave" style="margin:0">Todavía no has pedido nada en este ciclo.</p>'}</div>` : '';
+  return tarjetaSug + tarjetaAcum;
+}
+
+function hoyLocalDe(d) { return hoyLocal(d); }
+
 function vistaInsumos() {
   const P = S.ped || { cargando: true, insumos: [], solicitudes: [], form: {} };
   const f = P.form || {};
-  const opciones = P.insumos.map((i) => `<option value="${esc(i.id)}" ${f.insumo_id === i.id ? 'selected' : ''}>${esc(i.nombre)} (${esc(i.unidad)})</option>`).join('');
+  const opciones = P.insumos.map((i) => `<button class="cuadro ancho ${f.insumo_id === i.id ? 'sel' : ''}" data-accion="ins-elegir" data-id="${esc(i.id)}" aria-pressed="${f.insumo_id === i.id}"><b>${esc(i.nombre)}</b><small>${esc(i.unidad)}</small></button>`).join('');
   const estados = { pendiente: ['alerta', 'Pendiente'], consolidada: ['', 'En compra consolidada'], cancelada: ['gris', 'Cancelada'] };
   const historial = P.solicitudes.map((s) => {
     const [cls, txt] = estados[s.estado] || ['gris', s.estado];
@@ -554,9 +671,11 @@ function vistaInsumos() {
     <p class="suave">Tu cooperativa junta los pedidos de todos los ranchos para comprar en conjunto. Necesita internet.</p>
     ${P.error ? `<div class="aviso mal">${esc(P.error)}</div>` : ''}
     ${P.cargando ? '<p class="suave">Cargando…</p>' : `
+    ${bloqueCorte(P.corte)}
+    ${sugerenciaRancho()}
     <div class="card">
-      <label for="insumo">Insumo</label>
-      <select id="insumo" class="campo"><option value="">Elige…</option>${opciones}</select>
+      <label id="insumo">¿Qué insumo?</label>
+      <div class="cuadros dos" role="group" aria-labelledby="insumo">${opciones}</div>
       <label for="cantidad">Cantidad</label>
       <input id="cantidad" type="text" inputmode="numeric" value="${esc(f.cantidad)}" placeholder="10">
       <label for="nota">Nota (opcional)</label>
@@ -564,12 +683,13 @@ function vistaInsumos() {
       ${P.formError ? `<div class="aviso mal" style="margin-top:10px">${esc(P.formError)}</div>` : ''}
       <button class="btn primario" style="margin-top:12px" data-accion="sol-enviar">Enviar solicitud</button>
     </div>
+    ${entregasRancho()}
     <div class="card"><b>Mis solicitudes</b>${historial || '<p class="suave">Aún no has pedido nada.</p>'}</div>`}
     ${pie()}`);
 }
 
 async function enviarSolicitud() {
-  const form = { insumo_id: document.getElementById('insumo').value, cantidad: document.getElementById('cantidad').value.trim(), nota: document.getElementById('nota').value.trim() };
+  const form = { insumo_id: S.ped.form.insumo_id, cantidad: document.getElementById('cantidad').value.trim(), nota: document.getElementById('nota').value.trim() };
   S.ped.form = form;
   const err = validarSolicitud(form);
   if (err) { S.ped.formError = err; render(); return; }
@@ -578,7 +698,6 @@ async function enviarSolicitud() {
     S.ped.form = { insumo_id: '', cantidad: '', nota: '' };
     S.ped.formError = null;
     limpiarCampos('cantidad', 'nota');
-    const sel = document.getElementById('insumo'); if (sel) sel.value = '';
     toast('Solicitud enviada');
     await cargarInsumos();
   } catch (e) { S.ped.formError = msgError(e); render(); }
@@ -596,20 +715,24 @@ async function cancelarSolicitud(id) {
 // ---------- Panel de la asociación ----------
 
 async function abrirAsoc() {
-  S.asoc = { cargando: true, error: null, coop: S.admin[0], solicitudes: [], insumos: [], ranchos: [], ordenes: [], form: { tipo: 'veterinario', destinatario: '', nota: '' }, formError: null, sel: null, insForm: { nombre: '', unidad: '' }, insError: null };
+  S.asoc = { cargando: true, error: null, corte: null, corteError: null, coop: S.admin[0], solicitudes: [], insumos: [], ranchos: [], ordenes: [], entregas: [], recepciones: [], recep: null, form: { tipo: 'veterinario', destinatario: '', nota: '' }, formError: null, sel: null, insForm: { nombre: '', unidad: '' }, insError: null };
   ir('asoc');
   await cargarAsoc();
 }
 
 async function cargarAsoc() {
   try {
-    const [sol, ins, ran, ord] = await Promise.all([
-      api.rest('GET', '/solicitudes_insumo?select=id,rancho_id,insumo_id,cantidad,estado,orden_id,creado_en&order=creado_en.desc&limit=1000'),
-      api.rest('GET', '/insumos?select=id,nombre,unidad,activo&order=nombre.asc'),
+    const [sol, ins, ran, ord, ent, rec, coop] = await Promise.all([
+      api.rest('GET', '/solicitudes_insumo?select=id,rancho_id,insumo_id,cantidad,cantidad_asignada,estado,orden_id,creado_en&order=creado_en.desc&limit=1000'),
+      api.rest('GET', '/insumos?select=id,nombre,unidad,activo,estimar_base,estimar_factor&order=nombre.asc'),
       api.rest('GET', '/ranchos?select=id,nombre'),
-      api.rest('GET', '/ordenes_consolidadas?select=id,destinatario_tipo,destinatario,nota,estado,creada_en&order=creada_en.desc&limit=30'),
+      api.rest('GET', '/ordenes_consolidadas?select=id,codigo,destinatario_tipo,destinatario,nota,estado,creada_en&order=creada_en.desc&limit=30'),
+      api.rest('GET', '/entregas?select=id,orden_id,rancho_id,codigo,estado&order=codigo.asc&limit=500'),
+      api.rest('GET', '/orden_recepciones?select=orden_id,insumo_id,cantidad_solicitada,cantidad_recibida&limit=500'),
+      api.rest('GET', `/cooperativas?id=eq.${encodeURIComponent(S.asoc.coop.id)}&select=id,corte_dia,corte_hora`),
     ]);
-    Object.assign(S.asoc, { solicitudes: sol || [], insumos: ins || [], ranchos: ran || [], ordenes: ord || [], error: null });
+    S.asoc.corte = coop && coop[0] ? { dia: coop[0].corte_dia, hora: coop[0].corte_hora } : null;
+    Object.assign(S.asoc, { solicitudes: sol || [], insumos: ins || [], ranchos: ran || [], ordenes: ord || [], entregas: ent || [], recepciones: rec || [], error: null });
     const ids = agruparSolicitudes(S.asoc.solicitudes, S.asoc.insumos, S.asoc.ranchos).map((g) => g.insumo_id);
     S.asoc.sel = new Set(S.asoc.sel ? ids.filter((i) => S.asoc.sel.has(i)) : ids);
   } catch (e) { S.asoc.error = msgError(e); }
@@ -633,6 +756,120 @@ function itemsDeOrden(ordenId) {
   }).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
 }
 
+function nombreRancho(id) { const r = (S.asoc.ranchos || []).find((x) => x.id === id); return r ? r.nombre : 'Rancho'; }
+
+function entregasDeOrden(ordenId) {
+  return (S.asoc.entregas || []).filter((e) => e.orden_id === ordenId);
+}
+
+const ESTADOS_ENTREGA = { por_entregar: ['alerta', 'Por entregar'], entregada: ['', 'Entregada, falta confirmar'], confirmada: ['', 'Confirmada por el rancho'] };
+
+function textoReparto(ordenId, valores) {
+  // vista previa del reparto con lo recibido que se está escribiendo
+  const A = S.asoc;
+  const porInsumo = new Map();
+  for (const x of A.solicitudes) if (x.orden_id === ordenId) { if (!porInsumo.has(x.insumo_id)) porInsumo.set(x.insumo_id, []); porInsumo.get(x.insumo_id).push(x); }
+  return [...porInsumo.entries()].map(([insumoId, sols]) => {
+    const ins = A.insumos.find((i) => i.id === insumoId) || { nombre: 'Insumo', unidad: '' };
+    const v = Number(valores[insumoId]);
+    if (!Number.isInteger(v) || v < 0 || String(valores[insumoId]).trim() === '') return `<b>${esc(ins.nombre)}</b>: escribe cuánto llegó.`;
+    const r = repartir(sols, v);
+    const total = sols.reduce((a, x) => a + x.cantidad, 0);
+    const porRancho = new Map();
+    for (const x of sols) porRancho.set(x.rancho_id, (porRancho.get(x.rancho_id) || 0) + r.get(x.id));
+    const ped = new Map();
+    for (const x of sols) ped.set(x.rancho_id, (ped.get(x.rancho_id) || 0) + x.cantidad);
+    const aviso = v < total ? ` <span style="color:var(--ambar)">Llegó menos de lo pedido (${esc(total)}): se reparte proporcional.</span>` : v > total ? ` <span class="suave">Sobran ${esc(v - total)}: quedan en la asociación.</span>` : '';
+    return `<b>${esc(ins.nombre)}</b>:${aviso}<br>${[...porRancho.entries()].map(([rid, n]) => `${esc(nombreRancho(rid))} ${esc(n)} de ${esc(ped.get(rid))}`).join(' · ')}`;
+  }).join('<br>');
+}
+
+function tarjetaOrden(o) {
+  const A = S.asoc;
+  const [cls, txt] = ESTADOS_ORDEN[o.estado] || ['gris', o.estado];
+  const items = itemsDeOrden(o.id);
+  let accion = '';
+  if (o.estado === 'borrador') accion = `<button class="btn chico" data-accion="orden-estado" data-id="${esc(o.id)}" data-estado="enviada">Marcar como enviada</button>`;
+  if (o.estado === 'enviada' && !(A.recep && A.recep.ordenId === o.id)) accion = `<button class="btn chico primario" data-accion="orden-recibir" data-id="${esc(o.id)}">Registrar recepción</button>`;
+  let recepcion = '';
+  if (A.recep && A.recep.ordenId === o.id) {
+    recepcion = `<div class="card" style="margin-top:8px"><b>¿Cuánto llegó?</b>
+      ${Object.keys(A.recep.valores).map((id) => {
+        const ins = A.insumos.find((q) => q.id === id) || { nombre: 'Insumo', unidad: '' };
+        const pedido = A.solicitudes.filter((x) => x.orden_id === o.id && x.insumo_id === id).reduce((t, x) => t + x.cantidad, 0);
+        return `<label for="rec-${esc(id)}">${esc(ins.nombre)} (pedido: ${esc(pedido)} ${esc(ins.unidad)})</label><input id="rec-${esc(id)}" data-rec="${esc(id)}" type="text" inputmode="numeric" value="${esc(A.recep.valores[id] ?? '')}">`;
+      }).join('')}
+      <p class="suave" id="repartoPrev" style="margin:10px 0 0">${textoReparto(o.id, A.recep.valores)}</p>
+      ${A.recep.error ? `<div class="aviso mal" style="margin-top:10px">${esc(A.recep.error)}</div>` : ''}
+      <button class="btn primario" style="margin-top:12px" data-accion="recep-confirmar" data-id="${esc(o.id)}">Registrar recepción y repartir</button>
+      <button class="btn" data-accion="recep-cancelar">Cancelar</button></div>`;
+  }
+  let reparto = '';
+  if (o.estado === 'recibida') {
+    const rec = (A.recepciones || []).filter((r) => r.orden_id === o.id);
+    const falta = rec.filter((r) => r.cantidad_recibida < r.cantidad_solicitada);
+    reparto = `${falta.length ? `<div class="aviso warn" style="margin-top:8px">Llegó menos de lo pedido: ${falta.map((r) => { const i = A.insumos.find((x) => x.id === r.insumo_id) || { nombre: 'Insumo', unidad: '' }; return `${esc(i.nombre)} ${esc(r.cantidad_recibida)} de ${esc(r.cantidad_solicitada)}`; }).join(', ')}.</div>` : ''}
+      <div style="margin-top:8px"><b>Reparto por rancho</b></div>
+      ${entregasDeOrden(o.id).map((e) => {
+        const [ec, et] = ESTADOS_ENTREGA[e.estado] || ['gris', e.estado];
+        const lineas = lineasDeEntrega(A.solicitudes, A.insumos, o.id, e.rancho_id);
+        return `<div class="ev"><div class="fila"><b>${esc(e.codigo)}</b><span class="estado ${ec}">${esc(et)}</span></div>
+          <span>${esc(nombreRancho(e.rancho_id))}</span><br>
+          <span class="suave">${lineas.map((l) => `${esc(l.nombre)}: ${esc(l.asignada ?? '?')} de ${esc(l.pedida)} ${esc(l.unidad)}`).join(' · ')}</span>
+          ${e.estado === 'por_entregar' ? `<div><button class="btn chico" style="margin-top:6px" data-accion="entrega-marcar" data-id="${esc(e.id)}">Marcar entregada</button></div>` : ''}</div>`;
+      }).join('')}`;
+  } else if (o.estado !== 'borrador') {
+    reparto = `<p class="suave" style="margin:8px 0 0">El reparto por rancho aparece al registrar la recepción.</p>`;
+  }
+  return `<div class="ev"><div class="fila"><b>${esc(o.codigo || '')}</b><span class="estado ${cls}">${esc(txt)}</span></div>
+    <span>${esc(TIPOS_DEST[o.destinatario_tipo] || '')}: ${esc(o.destinatario)}</span><br>
+    <span class="suave">${esc(fechaCorta(String(o.creada_en).slice(0, 10)))}${o.nota ? ` · ${esc(o.nota)}` : ''}</span>
+    <div>${items.map((i) => `${esc(i.nombre)}: ${esc(i.total)} ${esc(i.unidad)}`).join('<br>')}</div>
+    <div style="margin-top:6px"><button class="btn chico" data-accion="orden-copiar" data-id="${esc(o.id)}">Copiar texto</button>${accion}</div>
+    ${recepcion}${reparto}</div>`;
+}
+
+function tarjetaCorte() {
+  const A = S.asoc;
+  if (!A.corte) return '';
+  const ahora = new Date();
+  const r = resumenCorte(A.solicitudes, ahora, A.corte.dia, A.corte.hora);
+  const dias = DIAS_SEMANA.map((d, i) => `<option value="${i}" ${A.corte.dia === i ? 'selected' : ''}>${d}</option>`).join('');
+  const horas = Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${A.corte.hora === h ? 'selected' : ''}>${String(h).padStart(2, '0')}:00</option>`).join('');
+  return `<div class="card"><b>Corte semanal</b>
+    <p style="margin:6px 0 0">Próximo corte: <b>${esc(textoCorte(A.corte.dia, A.corte.hora))}</b> · ${esc(textoFalta(ahora, r.proximo))}</p>
+    <p class="suave" style="margin:4px 0 0">Pendientes recibidas después del último corte: ${esc(r.nuevas)}.</p>
+    ${r.rezagadas ? `<div class="aviso warn" style="margin-top:8px">${esc(r.rezagadas)} solicitud(es) pendiente(s) llegaron <b>antes del último corte</b> y siguen sin consolidar.</div>` : ''}
+    <label for="corteDia">Cambiar día y hora del corte</label>
+    <select id="corteDia" class="campo">${dias}</select>
+    <select id="corteHora" class="campo" style="margin-top:8px">${horas}</select>
+    ${A.corteError ? `<div class="aviso mal" style="margin-top:10px">${esc(A.corteError)}</div>` : ''}
+    <button class="btn" style="margin-top:10px" data-accion="corte-guardar">Guardar corte</button></div>`;
+}
+
+async function guardarCorte() {
+  const A = S.asoc;
+  const dia = Number(document.getElementById('corteDia').value), hora = Number(document.getElementById('corteHora').value);
+  try {
+    await api.rest('POST', '/rpc/configurar_corte', { p_coop: A.coop.id, p_dia: dia, p_hora: hora });
+    A.corteError = null;
+    toast('Corte guardado');
+    await cargarAsoc();
+  } catch (e) { A.corteError = msgError(e); render(); }
+}
+
+async function guardarEstimacion(id) {
+  const base = document.getElementById(`eb-${id}`).value;
+  const txt = document.getElementById(`ef-${id}`).value.trim().replace(',', '.');
+  const factor = Number(txt);
+  if (txt === '' || !Number.isFinite(factor) || factor < 0 || factor > 1000) { toast('Escribe una cantidad por vaca entre 0 y 1000.'); return; }
+  try {
+    await api.rest('POST', '/rpc/configurar_estimacion', { p_insumo: id, p_base: base, p_factor: factor });
+    toast('Estimación guardada');
+    await cargarAsoc();
+  } catch (e) { toast(msgError(e)); }
+}
+
 function vistaAsoc() {
   const A = S.asoc;
   if (!A) return vistaInicio();
@@ -641,22 +878,21 @@ function vistaAsoc() {
       <input type="checkbox" data-grupo="${esc(g.insumo_id)}" ${A.sel && A.sel.has(g.insumo_id) ? 'checked' : ''} style="width:26px;height:26px;margin-top:2px">
       <span style="flex:1"><b>${esc(g.nombre)}</b> · ${esc(g.total)} ${esc(g.unidad)}<br><span class="suave">${g.ranchos.map((r) => `${esc(r.rancho)}: ${esc(r.cantidad)}`).join(' · ')}</span></span></label>`).join('');
   const f = A.form;
-  const ordenes = A.ordenes.map((o) => {
-    const [cls, txt] = ESTADOS_ORDEN[o.estado] || ['gris', o.estado];
-    const items = itemsDeOrden(o.id);
-    const sig = o.estado === 'borrador' ? ['enviada', 'Marcar como enviada'] : o.estado === 'enviada' ? ['recibida', 'Marcar como recibida'] : null;
-    return `<div class="ev"><div class="fila"><b>${esc(TIPOS_DEST[o.destinatario_tipo] || '')}: ${esc(o.destinatario)}</b><span class="estado ${cls}">${esc(txt)}</span></div>
-      <span class="suave">${esc(fechaCorta(String(o.creada_en).slice(0, 10)))}${o.nota ? ` · ${esc(o.nota)}` : ''}</span>
-      <div>${items.map((i) => `${esc(i.nombre)}: ${esc(i.total)} ${esc(i.unidad)}`).join('<br>')}</div>
-      <div style="margin-top:6px"><button class="btn chico" data-accion="orden-copiar" data-id="${esc(o.id)}">Copiar texto</button>${sig ? `<button class="btn chico" data-accion="orden-estado" data-id="${esc(o.id)}" data-estado="${sig[0]}">${sig[1]}</button>` : ''}</div></div>`;
-  }).join('');
-  const catalogo = A.insumos.map((i) => `<div class="ev"><span>${esc(i.nombre)}</span> <span class="suave">· ${esc(i.unidad)}${i.activo ? '' : ' · inactivo'}</span></div>`).join('');
+  const ordenes = A.ordenes.map((o) => tarjetaOrden(o)).join('');
+  const BASES = { ninguna: 'No estimar', servicio: 'Vacas por servir', diagnostico: 'Vacas por diagnosticar' };
+  const catalogo = A.insumos.map((i) => `<div class="ev"><span>${esc(i.nombre)}</span> <span class="suave">· ${esc(i.unidad)}${i.activo ? '' : ' · inactivo'}</span>
+      <label for="eb-${esc(i.id)}" style="margin-top:6px">Estimar por rancho (opcional)</label>
+      <select id="eb-${esc(i.id)}" class="campo">${Object.entries(BASES).map(([k, v]) => `<option value="${k}" ${(i.estimar_base || 'ninguna') === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+      <label for="ef-${esc(i.id)}">Cantidad por vaca</label>
+      <input id="ef-${esc(i.id)}" type="text" inputmode="decimal" value="${esc(i.estimar_factor ?? 0)}">
+      <button class="btn chico" style="margin-top:6px" data-accion="est-guardar" data-id="${esc(i.id)}">Guardar estimación</button></div>`).join('');
   return marco(`
     <button class="atras" data-accion="ir" data-vista="inicio">‹ Inicio</button>
     <h2>Panel de la asociación</h2>
     <p class="suave">${esc(A.coop ? A.coop.nombre : '')}. Aquí ves lo que piden los ranchos para comprar en conjunto. No ves sus vacas ni sus registros. Necesita internet.</p>
     ${A.error ? `<div class="aviso mal">${esc(A.error)}</div>` : ''}
     ${A.cargando ? '<p class="suave">Cargando…</p>' : `
+    ${tarjetaCorte()}
     <div class="card"><b>Demanda pendiente</b>${demanda || '<p class="suave">No hay solicitudes pendientes.</p>'}</div>
     ${grupos.length ? `<div class="card"><b>Crear compra consolidada</b>
       <p class="suave" style="margin:4px 0 0">Incluye los insumos marcados arriba.</p>
@@ -717,8 +953,40 @@ async function copiarOrden(id) {
   const o = S.asoc.ordenes.find((x) => x.id === id);
   if (!o) return;
   const lineas = itemsDeOrden(id).map((i) => `- ${i.nombre}: ${i.total} ${i.unidad}`);
-  const texto = `Compra consolidada · ${S.asoc.coop ? S.asoc.coop.nombre : ''}\nPara: ${o.destinatario}\n${lineas.join('\n')}${o.nota ? `\nNota: ${o.nota}` : ''}`;
+  const ents = entregasDeOrden(id).map((e) => `${e.codigo} · ${nombreRancho(e.rancho_id)}: ${lineasDeEntrega(S.asoc.solicitudes, S.asoc.insumos, id, e.rancho_id).map((l) => `${l.nombre} ${l.asignada ?? l.pedida} ${l.unidad}`).join(', ')}`);
+  const texto = `Compra consolidada ${o.codigo || ''} · ${S.asoc.coop ? S.asoc.coop.nombre : ''}\nPara: ${o.destinatario}\n${lineas.join('\n')}${ents.length ? `\nReparto:\n${ents.join('\n')}` : ''}${o.nota ? `\nNota: ${o.nota}` : ''}`;
   try { await navigator.clipboard.writeText(texto); toast('Texto copiado'); } catch { window.prompt('Copia este texto:', texto); }
+}
+
+function abrirRecepcion(ordenId) {
+  const valores = {};
+  for (const x of S.asoc.solicitudes) if (x.orden_id === ordenId) valores[x.insumo_id] = String((Number(valores[x.insumo_id]) || 0) + x.cantidad);
+  S.asoc.recep = { ordenId, valores, error: null };
+  render();
+}
+
+async function confirmarRecepcion(ordenId) {
+  const R = S.asoc.recep;
+  const recibido = {};
+  for (const [id, v] of Object.entries(R.valores)) {
+    const n = Number(v);
+    if (String(v).trim() === '' || !Number.isInteger(n) || n < 0) { R.error = 'Escribe cuánto llegó de cada insumo (número entero, 0 si no llegó).'; render(); return; }
+    recibido[id] = n;
+  }
+  const resumen = itemsDeOrden(ordenId).length;
+  if (!window.confirm(`Se registrará la recepción de ${resumen} insumo(s) y se repartirá entre los ranchos. No se puede deshacer desde aquí. ¿Continuar?`)) return;
+  try {
+    await api.rest('POST', '/rpc/recibir_orden', { p_orden: ordenId, p_recibido: recibido });
+    S.asoc.recep = null;
+    toast('Recepción registrada y repartida');
+    await cargarAsoc();
+  } catch (e) { R.error = msgError(e); render(); }
+}
+
+async function marcarEntrega(id) {
+  try { await api.rest('POST', '/rpc/marcar_entrega', { p_entrega: id }); toast('Entrega marcada'); }
+  catch (e) { toast(msgError(e)); }
+  await cargarAsoc();
 }
 
 async function crearInsumo() {
@@ -753,7 +1021,7 @@ $app.addEventListener('click', async (ev) => {
     case 'op': capturarCampos(); S.reg.datos[el.dataset.campo] = el.dataset.valor; render(); break;
     case 'fecha-rapida': { const f = sumarDias(hoyLocal(), Number(el.dataset.dias)); S.reg.fecha = f; const i = document.getElementById('fecha'); if (i) i.value = f; break; }
     case 'guardar': await guardarEvento(); break;
-    case 'ficha': S.fichaId = el.dataset.id; ir('ficha'); break;
+    case 'ficha': S.fichaId = el.dataset.id; S.fichaDesde = S.vista === 'atender' ? 'atender' : 'vacas'; ir('ficha'); break;
     case 'anular': await anularEvento(el.dataset.id); break;
     case 'sync': { const res = await sincronizarYRefrescar(true); if (!res) toast('Ya se está enviando.'); break; }
     case 'reintentar': { const o = await store.get(el.dataset.tabla, el.dataset.id); if (o) { await store.put(el.dataset.tabla, { ...o, _sync: 'pendiente', _error: null }); await refrescar(); render(); sincronizarYRefrescar(true); } break; }
@@ -764,20 +1032,39 @@ $app.addEventListener('click', async (ev) => {
     }
     case 'reingresar': S.loginEmail = (api.getSession() || { user: {} }).user.email || ''; user = null; render(); break;
     case 'salir': await salir(); break;
-    case 'panel-abrir': { const r = S.ranchos.find((x) => x.id === el.dataset.id); if (r) { S.rancho = r; await store.setMeta('ranchoActivo', r.id); await refrescar(); ir('atender'); } break; }
+    case 'panel-grupo': { const r = S.ranchos.find((x) => x.id === el.dataset.id); if (r) { S.rancho = r; S.tabAtender = 'ver'; S.grupoAtender = el.dataset.grupo; await store.setMeta('ranchoActivo', r.id); await refrescar(); ir('atender', true); } break; }
+    case 'atender-todas': S.grupoAtender = null; render(); break;
+    case 'panel-abrir': { const r = S.ranchos.find((x) => x.id === el.dataset.id); if (r) { S.rancho = r; S.tabAtender = 'ver'; S.grupoAtender = null; await store.setMeta('ranchoActivo', r.id); await refrescar(); ir('atender'); } break; }
     case 'abrir-insumos': await abrirInsumos(); break;
     case 'sol-enviar': await enviarSolicitud(); break;
     case 'sol-cancelar': await cancelarSolicitud(el.dataset.id); break;
     case 'abrir-asoc': await abrirAsoc(); break;
     case 'asoc-consolidar': await consolidar(); break;
     case 'orden-estado': await cambiarEstadoOrden(el.dataset.id, el.dataset.estado); break;
+    case 'tab-atender': S.tabAtender = el.dataset.tab; render(); break;
+    case 'orden-vacas': S.ordenVacas = el.dataset.orden; pintarResultados(); break;
+    case 'ins-elegir': S.ped.form.insumo_id = el.dataset.id; S.ped.formError = null; render(); break;
+    case 'sug-usar': S.ped.form.insumo_id = el.dataset.id; document.getElementById('cantidad').value = el.dataset.cant; document.getElementById('nota').value = ''; S.ped.formError = null; render(); document.getElementById('cantidad').scrollIntoView({ block: 'center' }); break;
+    case 'corte-guardar': await guardarCorte(); break;
+    case 'est-guardar': await guardarEstimacion(el.dataset.id); break;
     case 'orden-copiar': await copiarOrden(el.dataset.id); break;
+    case 'orden-recibir': abrirRecepcion(el.dataset.id); break;
+    case 'recep-confirmar': await confirmarRecepcion(el.dataset.id); break;
+    case 'recep-cancelar': S.asoc.recep = null; render(); break;
+    case 'entrega-marcar': await marcarEntrega(el.dataset.id); break;
+    case 'entrega-confirmar': await confirmarEntrega(el.dataset.id); break;
     case 'insumo-crear': await crearInsumo(); break;
     default: break;
   }
 });
 
 $app.addEventListener('input', (ev) => {
+  if (ev.target.dataset && ev.target.dataset.rec && S.asoc && S.asoc.recep) {
+    S.asoc.recep.valores[ev.target.dataset.rec] = ev.target.value;
+    const prev = document.getElementById('repartoPrev');
+    if (prev) prev.innerHTML = textoReparto(S.asoc.recep.ordenId, S.asoc.recep.valores);
+    return;
+  }
   if (ev.target.id === 'arete') { S.reg.arete = ev.target.value; pintarResultados(); }
   else if (ev.target.id === 'filtro') {
     S.filtro = ev.target.value;

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { hoyLocal, diasEntre, sumarDias, normArete, validarEvento, eventosVigentes, estadoVaca, tipoSugerido, PARAMS } from '../app/lib.js';
+import { hoyLocal, diasEntre, sumarDias, normArete, validarEvento, eventosVigentes, estadoVaca, tipoSugerido, PARAMS } from '../lib.js';
 
 const ev = (tipo, fecha, datos = {}, extra = {}) => ({ id: `${tipo}-${fecha}-${Math.random()}`, tipo, fecha, datos, dispositivo_ts: `${fecha}T12:00:00Z`, ...extra });
 

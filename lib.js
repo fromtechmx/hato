@@ -180,7 +180,7 @@ export function textoError(e) {
 
 // ---------- Panel del veterinario ----------
 // Umbrales PROVISIONALES: pendientes de validar con un MVZ.
-export const UMBRALES = { visitaMin: 5, diasSinDatos: 14 };
+export const UMBRALES = { visitaMin: 5, diasSinDatos: 14, diasSinMovimiento: 120, diasPartoVencido: 21 }; // provisionales: validar con un MVZ
 
 /** Último dato que el servidor recibió de un rancho (ISO) o null. Ignora lo que aún está solo en el teléfono. */
 export function ultimoDatoTs(animales, eventos) {
@@ -199,12 +199,13 @@ export function resumenRancho(animales, eventos, hoy, ahoraMs = Date.now(), P = 
     if (!porVaca.has(e.animal_id)) porVaca.set(e.animal_id, []);
     porVaca.get(e.animal_id).push(e);
   }
-  const r = { vacas: animales.length, diagnosticar: 0, partoProximo: 0, celo: 0, abiertas: 0, listas: 0, alertas: 0, proxima: null, ultimoDato: ultimoDatoTs(animales, eventos), diasSinDatos: null };
+  const r = { vacas: animales.length, sinDatosVacas: 0, diagnosticar: 0, partoProximo: 0, celo: 0, abiertas: 0, listas: 0, alertas: 0, proxima: null, ultimoDato: ultimoDatoTs(animales, eventos), diasSinDatos: null };
   let proxima = null;
   const candidata = (fecha, texto) => { if (!proxima || fecha < proxima.fecha) proxima = { fecha, texto }; };
   for (const a of animales) {
     const est = estadoVaca(porVaca.get(a.id) || [], hoy, P);
     if (est.alerta) r.alertas++;
+    if (motivoSinDatos(est, porVaca.get(a.id) || [], hoy)) r.sinDatosVacas++;
     switch (est.codigo) {
       case 'diagnosticar': r.diagnosticar++; break;
       case 'parto_proximo': r.partoProximo++; break;
@@ -269,4 +270,187 @@ export function validarSolicitud({ insumo_id, cantidad }) {
   const n = Number(cantidad);
   if (!Number.isInteger(n) || n < 1 || n > 100000) return 'La cantidad debe ser un número entero mayor que cero.';
   return null;
+}
+
+/** Reparto de lo recibido entre las solicitudes de un insumo. Espejo de public.recibir_orden (SQL):
+ * si llegó todo o más, cada una recibe lo pedido; si llegó menos, reparto proporcional y los residuos van al mayor decimal
+ * (empate: la solicitud más antigua; luego por id). Devuelve Map id -> cantidad asignada. */
+export function repartir(solicitudes, recibido) {
+  const total = solicitudes.reduce((a, s) => a + s.cantidad, 0);
+  const out = new Map();
+  if (recibido >= total) { for (const s of solicitudes) out.set(s.id, s.cantidad); return out; }
+  let asignado = 0;
+  const filas = solicitudes.map((s) => {
+    const base = Math.floor((s.cantidad * recibido) / total);
+    asignado += base;
+    return { s, base, resto: (s.cantidad * recibido) % total };
+  });
+  filas.sort((a, b) => b.resto - a.resto || String(a.s.creado_en).localeCompare(String(b.s.creado_en)) || String(a.s.id).localeCompare(String(b.s.id)));
+  let sobran = recibido - asignado;
+  for (const f of filas) { out.set(f.s.id, f.base + (sobran > 0 ? 1 : 0)); if (sobran > 0) sobran--; }
+  return out;
+}
+
+/** Líneas de una entrega (un rancho dentro de una compra): pedido vs asignado por insumo. */
+export function lineasDeEntrega(solicitudes, insumos, ordenId, ranchoId) {
+  const porInsumo = new Map();
+  for (const s of solicitudes) {
+    if (s.orden_id !== ordenId || s.rancho_id !== ranchoId) continue;
+    const l = porInsumo.get(s.insumo_id) || { pedida: 0, asignada: 0, conAsignacion: false };
+    l.pedida += s.cantidad;
+    if (s.cantidad_asignada !== null && s.cantidad_asignada !== undefined) { l.asignada += s.cantidad_asignada; l.conAsignacion = true; }
+    porInsumo.set(s.insumo_id, l);
+  }
+  return [...porInsumo.entries()].map(([id, l]) => {
+    const i = insumos.find((x) => x.id === id) || { nombre: 'Insumo', unidad: '' };
+    return { nombre: i.nombre, unidad: i.unidad, pedida: l.pedida, asignada: l.conAsignacion ? l.asignada : null };
+  }).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+}
+
+// ---------- Corte semanal y necesidad estimada ----------
+
+export const DIAS_SEMANA = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+export const HORIZONTE_DIAS = 7;
+
+/** Corte anterior y siguiente respecto a `ahora` (hora local del dispositivo). dia: 0=domingo … 6=sábado.
+ * Justo en el instante del corte, ese corte ya pasó y el siguiente es el de la semana próxima. */
+export function cortesAlrededor(ahora, dia, hora) {
+  const c = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate(), hora, 0, 0, 0);
+  c.setDate(c.getDate() + (dia - c.getDay()));
+  if (c.getTime() > ahora.getTime()) c.setDate(c.getDate() - 7);
+  const ultimo = new Date(c.getTime());
+  const proximo = new Date(ultimo.getFullYear(), ultimo.getMonth(), ultimo.getDate() + 7, hora, 0, 0, 0);
+  return { ultimo, proximo };
+}
+
+/** "faltan 2 días 4 h" / "faltan 5 h" / "falta menos de 1 h" */
+export function textoFalta(ahora, proximo) {
+  const min = Math.max(0, Math.floor((proximo.getTime() - ahora.getTime()) / 60000));
+  const d = Math.floor(min / 1440), h = Math.floor((min % 1440) / 60);
+  if (d > 0) return `faltan ${d} ${d === 1 ? 'día' : 'días'}${h ? ` ${h} h` : ''}`;
+  if (h > 0) return `faltan ${h} h`;
+  return 'falta menos de 1 h';
+}
+
+export function textoCorte(dia, hora) {
+  return `${DIAS_SEMANA[dia]} ${String(hora).padStart(2, '0')}:00`;
+}
+
+/** Para el admin: de las solicitudes pendientes, cuántas llegaron antes del último corte (rezagadas) y cuántas después. */
+export function resumenCorte(solicitudes, ahora, dia, hora) {
+  const { ultimo, proximo } = cortesAlrededor(ahora, dia, hora);
+  let rezagadas = 0, nuevas = 0;
+  for (const s of solicitudes) {
+    if (s.estado !== 'pendiente') continue;
+    if (new Date(s.creado_en).getTime() < ultimo.getTime()) rezagadas++; else nuevas++;
+  }
+  return { ultimo, proximo, rezagadas, nuevas };
+}
+
+/** Necesidad estimada de insumos para los próximos HORIZONTE_DIAS, según el estado del hato.
+ * 'servicio': vacas en celo, abiertas, listas, o posparto que estarán listas dentro del horizonte (cota superior: no todas se servirán).
+ * 'diagnostico': vacas que ya tocan diagnóstico o que lo cumplirán dentro del horizonte.
+ * Resultado = ceil(vacas × factor). `pendientes`: Map insumo_id → cantidad ya solicitada y aún pendiente. */
+export function necesidadSemana(animales, eventos, hoy, insumos, pendientes = new Map(), P = PARAMS) {
+  const porVaca = new Map();
+  for (const e of eventos) {
+    if (!porVaca.has(e.animal_id)) porVaca.set(e.animal_id, []);
+    porVaca.get(e.animal_id).push(e);
+  }
+  let servicio = 0, diagnostico = 0;
+  for (const a of animales) {
+    const est = estadoVaca(porVaca.get(a.id) || [], hoy, P);
+    switch (est.codigo) {
+      case 'celo': case 'abierta': case 'lista': servicio++; break;
+      case 'posparto': if (P.esperaServicio - est.dias <= HORIZONTE_DIAS) servicio++; break;
+      case 'diagnosticar': diagnostico++; break;
+      case 'servida': if (P.diasDiagnostico - est.dias <= HORIZONTE_DIAS) diagnostico++; break;
+      default: break;
+    }
+  }
+  const out = [];
+  for (const i of insumos) {
+    if (!i.estimar_base || i.estimar_base === 'ninguna' || !(Number(i.estimar_factor) > 0)) continue;
+    const vacas = i.estimar_base === 'servicio' ? servicio : diagnostico;
+    const sugerida = Math.ceil(vacas * Number(i.estimar_factor));
+    if (sugerida <= 0) continue;
+    const ya = pendientes.get(i.id) || 0;
+    out.push({ insumo_id: i.id, nombre: i.nombre, unidad: i.unidad, base: i.estimar_base, vacas, factor: Number(i.estimar_factor), sugerida, ya, faltante: Math.max(0, sugerida - ya) });
+  }
+  return out.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+}
+
+/** Acumulado de lo solicitado en el ciclo actual (desde el último corte): suma por insumo de las solicitudes no canceladas,
+ * estén pendientes o ya consolidadas (así no "se reinicia" cuando la cooperativa consolida). Map insumo_id → cantidad. */
+export function acumuladoCiclo(solicitudes, ahora, dia, hora) {
+  const { ultimo } = cortesAlrededor(ahora, dia, hora);
+  const out = new Map();
+  for (const s of solicitudes) {
+    if (s.estado === 'cancelada') continue;
+    if (new Date(s.creado_en).getTime() < ultimo.getTime()) continue;
+    out.set(s.insumo_id, (out.get(s.insumo_id) || 0) + s.cantidad);
+  }
+  return out;
+}
+
+// ---------- Vacas que "no tienen datos" y priorización por atender ----------
+
+/** ¿Hay que averiguar qué pasó con esta vaca? Devuelve null o { tipo, texto, dias, orden } (orden: más bajo = más urgente de averiguar).
+ *  Casos (umbrales provisionales en UMBRALES):
+ *  - parto esperado vencido: gestante sin registro de parto, `diasPartoVencido` días después de la fecha esperada;
+ *  - sin movimiento: último registro de hace más de `diasSinMovimiento` días y no está gestante ni descartada;
+ *  - sin estado: solo notas/tratamientos, sin parto, servicio ni diagnóstico;
+ *  - sin registros: ningún registro. */
+export function motivoSinDatos(est, eventos, hoy, U = UMBRALES) {
+  if (est.codigo === 'descartada') return null;
+  const evs = eventosVigentes(eventos);
+  if (est.codigo === 'sin_datos') return { tipo: 'sin_registros', texto: 'Sin ningún registro', dias: null, orden: 4 };
+  if (est.codigo === 'sin_estado') return { tipo: 'sin_estado', texto: 'Solo tiene notas o tratamientos; falta un parto, servicio o diagnóstico', dias: null, orden: 3 };
+  if ((est.codigo === 'parto_proximo' || est.codigo === 'gestante') && est.partoEsperado) {
+    const vencido = diasEntre(est.partoEsperado, hoy);
+    if (vencido > U.diasPartoVencido) return { tipo: 'parto_vencido', texto: `Parto esperado el ${fechaCorta(est.partoEsperado)} (hace ${vencido} días) y sin registro de parto`, dias: vencido, orden: 1 };
+  }
+  if (est.codigo !== 'gestante' && est.codigo !== 'parto_proximo' && evs.length) {
+    const ultima = evs.reduce((m, e) => (e.fecha > m ? e.fecha : m), evs[0].fecha);
+    const dias = diasEntre(ultima, hoy);
+    if (dias > U.diasSinMovimiento) return { tipo: 'sin_movimiento', texto: `Último registro hace ${dias} días (${fechaCorta(ultima)}); estado actual: ${est.texto.toLowerCase()}`, dias, orden: 2 };
+  }
+  return null;
+}
+
+const GRUPOS_POR_VER = [
+  { codigo: 'diagnosticar', titulo: 'Toca diagnóstico', nota: 'las más atrasadas primero' },
+  { codigo: 'parto_proximo', titulo: 'Parto próximo', nota: 'la fecha más cercana primero' },
+  { codigo: 'celo', titulo: 'En celo: inseminar', nota: '' },
+  { codigo: 'abierta', titulo: 'Vacías (abiertas)', nota: 'las que más días llevan primero' },
+  { codigo: 'lista', titulo: 'Listas para servicio', nota: 'las que más días llevan primero' },
+];
+
+/** Separa el hato en: `grupos` (vacas por ver, ordenadas por prioridad y dentro de cada grupo por urgencia) y `sinDatos` (vacas a averiguar).
+ *  Una vaca puede aparecer en ambos (p. ej. "parto próximo" con parto vencido): `dudosa` marca esas en `grupos`. */
+export function clasificarHato(animales, eventos, hoy, P = PARAMS, U = UMBRALES) {
+  const porVaca = new Map();
+  for (const e of eventos) {
+    if (!porVaca.has(e.animal_id)) porVaca.set(e.animal_id, []);
+    porVaca.get(e.animal_id).push(e);
+  }
+  const num = (x, y) => x.a.arete.localeCompare(y.a.arete, 'es', { numeric: true });
+  const filas = animales.map((a) => {
+    const evs = porVaca.get(a.id) || [];
+    const est = estadoVaca(evs, hoy, P);
+    return { a, est, motivo: motivoSinDatos(est, evs, hoy, U) };
+  });
+  const urgencia = {
+    diagnosticar: (x, y) => (y.est.dias ?? 0) - (x.est.dias ?? 0) || num(x, y),
+    parto_proximo: (x, y) => String(x.est.partoEsperado).localeCompare(String(y.est.partoEsperado)) || num(x, y),
+    abierta: (x, y) => (y.est.dias ?? 0) - (x.est.dias ?? 0) || num(x, y),
+    lista: (x, y) => (y.est.dias ?? 0) - (x.est.dias ?? 0) || num(x, y),
+    celo: num,
+  };
+  const grupos = GRUPOS_POR_VER.map((g) => ({
+    ...g,
+    vacas: filas.filter((f) => f.est.codigo === g.codigo).sort(urgencia[g.codigo]).map((f) => ({ ...f, dudosa: !!f.motivo })),
+  })).filter((g) => g.vacas.length);
+  const sinDatos = filas.filter((f) => f.motivo).sort((x, y) => x.motivo.orden - y.motivo.orden || (y.motivo.dias ?? 0) - (x.motivo.dias ?? 0) || num(x, y));
+  return { grupos, totalPorVer: grupos.reduce((n, g) => n + g.vacas.length, 0), sinDatos };
 }

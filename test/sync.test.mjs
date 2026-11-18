@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MockSupabase, crearFetch } from './mock-supabase.mjs';
-import { createApi } from '../app/api.js';
-import { createSync } from '../app/sync.js';
-import { createMemStore } from '../app/store.js';
-import { uuid, estadoVaca } from '../app/lib.js';
+import { createApi } from '../api.js';
+import { createSync } from '../sync.js';
+import { createMemStore } from '../store.js';
+import { uuid, estadoVaca } from '../lib.js';
 
 function memStorage() {
   const m = new Map();

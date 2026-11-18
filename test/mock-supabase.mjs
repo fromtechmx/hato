@@ -1,7 +1,7 @@
 // Supabase SIMULADO para pruebas (no es Supabase real). Imita lo que usa HATO:
 // Auth (password + refresh con rotación), PostgREST (filtros, orden, límite, on_conflict) y las reglas RLS/FK/únicos del esquema.
 
-import { repartir } from '../app/lib.js';
+import { repartir } from '../lib.js';
 
 const AHORA_BASE = Date.UTC(2026, 10, 18, 17, 0, 0);
 

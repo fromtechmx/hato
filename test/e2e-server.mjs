@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { MockSupabase } from './mock-supabase.mjs';
 
-const APP = path.resolve(new URL('../app', import.meta.url).pathname);
+const APP = path.resolve(new URL('..', import.meta.url).pathname);
 const mock = new MockSupabase();
 const u = mock.crearUsuario('vaquero@test.invalid', 'clave-de-prueba');
 const r1 = mock.crearRancho({ cooperativa: 'Coop Sintética', socio: 'Socio Uno', rancho: 'Rancho El Prueba' });

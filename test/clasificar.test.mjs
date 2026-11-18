@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clasificarHato, motivoSinDatos, estadoVaca, resumenRancho } from '../app/lib.js';
+import { clasificarHato, motivoSinDatos, estadoVaca, resumenRancho } from '../lib.js';
 
 const hoy = '2026-11-18';
 const A = (id, arete) => ({ id, arete: arete ?? id });

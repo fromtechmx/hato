@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resumenRancho, recomendarVisita, agruparSolicitudes, validarSolicitud, sumarDias } from '../app/lib.js';
+import { resumenRancho, recomendarVisita, agruparSolicitudes, validarSolicitud, sumarDias } from '../lib.js';
 
 const HOY = '2026-11-18';
 const NOW = new Date('2026-11-18T18:00:00Z').getTime();
@@ -88,7 +88,7 @@ test('validar solicitud', () => {
   assert.equal(validarSolicitud({ insumo_id: 'x', cantidad: '12' }), null);
 });
 
-import { repartir, lineasDeEntrega } from '../app/lib.js';
+import { repartir, lineasDeEntrega } from '../lib.js';
 
 const S = (id, cantidad, creado_en = '2026-11-18T10:00:00Z') => ({ id, cantidad, creado_en });
 const suma = (m) => [...m.values()].reduce((a, b) => a + b, 0);

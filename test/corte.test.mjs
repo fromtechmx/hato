@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { acumuladoCiclo, cortesAlrededor, textoFalta, textoCorte, resumenCorte, necesidadSemana } from '../app/lib.js';
+import { acumuladoCiclo, cortesAlrededor, textoFalta, textoCorte, resumenCorte, necesidadSemana } from '../lib.js';
 
 const L = (y, m, d, h = 0, mi = 0) => new Date(y, m - 1, d, h, mi, 0, 0);
 // 2026-11-18 es miércoles
