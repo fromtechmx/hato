@@ -383,7 +383,10 @@ function render() {
   if (S.cargando) { $app.innerHTML = `${cabecera()}<main><p class="suave">Descargando tus datos…</p></main>`; return; }
   if (S.vista === 'registro' && S.reg) capturarCampos();
   if (S.vista === 'asoc') capturarFormAsoc();
-  if (S.vista === 'insumos' && S.ped && document.getElementById('cantidad')) S.ped.form = { insumo_id: S.ped.form.insumo_id, cantidad: document.getElementById('cantidad').value, nota: document.getElementById('nota').value };
+  if (S.vista === 'insumos' && S.ped && document.getElementById('nota')) {
+    document.querySelectorAll('input[data-cant]').forEach((el) => { if (Object.prototype.hasOwnProperty.call(S.ped.form.items, el.dataset.cant)) S.ped.form.items[el.dataset.cant] = el.value; }); // solo los aún elegidos: el DOM viejo no resucita lo quitado/enviado
+    S.ped.form.nota = document.getElementById('nota').value;
+  }
   let html;
   switch (S.vista) {
     case 'vacas': html = vistaVacas(); break;
@@ -571,7 +574,7 @@ function msgError(e) {
 }
 
 async function abrirInsumos() {
-  S.ped = { cargando: true, error: null, formError: null, corte: null, estim: new Map(), configAbierta: false, estError: null, insumos: [], solicitudes: [], entregas: [], form: { insumo_id: '', cantidad: '', nota: '' } };
+  S.ped = { cargando: true, error: null, formError: null, corte: null, estim: new Map(), configAbierta: false, estError: null, insumos: [], solicitudes: [], entregas: [], form: { items: {}, nota: '' } };
   ir('insumos');
   await cargarInsumos();
 }
@@ -702,10 +705,28 @@ function sugerenciaRancho() {
 
 function hoyLocalDe(d) { return hoyLocal(d); }
 
+function htmlResumenPedido() {
+  const P = S.ped; const items = (P && P.form && P.form.items) || {};
+  const elegidos = (P ? P.insumos : []).filter((i) => Object.prototype.hasOwnProperty.call(items, i.id));
+  return `<div id="resumenPedido">${elegidos.length ? `<div class="resumen"><b>Lo que vas a solicitar</b>${elegidos.map((i) => `<div class="fila"><span>${esc(i.nombre)}</span><b>${String(items[i.id]).trim() ? `${esc(String(items[i.id]).trim())} ${esc(i.unidad)}` : '<span class="suave">falta cantidad</span>'}</b></div>`).join('')}</div>` : '<p class="suave" style="margin:12px 0 0">Toca un insumo para pedirlo: debajo de él aparece la cantidad.</p>'}</div>`;
+}
+
+function textoBotonEnviar() {
+  const n = Object.keys(S.ped.form.items).length;
+  return n > 1 ? `Enviar ${n} solicitudes` : 'Enviar solicitud';
+}
+
 function vistaInsumos() {
   const P = S.ped || { cargando: true, insumos: [], solicitudes: [], form: {} };
   const f = P.form || {};
-  const opciones = P.insumos.map((i) => `<button class="cuadro ancho ${f.insumo_id === i.id ? 'sel' : ''}" data-accion="ins-elegir" data-id="${esc(i.id)}" aria-pressed="${f.insumo_id === i.id}"><b>${esc(i.nombre)}</b><small>${esc(i.unidad)}</small></button>`).join('');
+  const items = f.items || {};
+  const opciones = P.insumos.map((i) => {
+    const sel = Object.prototype.hasOwnProperty.call(items, i.id);
+    return `<div class="celda"><button class="cuadro ancho ${sel ? 'sel' : ''}" data-accion="ins-elegir" data-id="${esc(i.id)}" aria-pressed="${sel}"><b>${esc(i.nombre)}</b><small>${esc(i.unidad)}</small></button>
+      ${sel ? `<label class="cant" for="cant-${esc(i.id)}">Cantidad de ${esc(i.nombre)}</label><input id="cant-${esc(i.id)}" data-cant="${esc(i.id)}" type="text" inputmode="numeric" value="${esc(items[i.id])}" placeholder="10" aria-label="Cantidad de ${esc(i.nombre)}">` : ''}</div>`;
+  }).join('');
+  const elegidos = P.insumos.filter((i) => Object.prototype.hasOwnProperty.call(items, i.id));
+  const resumen = htmlResumenPedido();
   const estados = { pendiente: ['alerta', 'Pendiente'], consolidada: ['', 'En compra consolidada'], cancelada: ['gris', 'Cancelada'] };
   const historial = P.solicitudes.map((s) => {
     const [cls, txt] = estados[s.estado] || ['gris', s.estado];
@@ -724,12 +745,11 @@ function vistaInsumos() {
     <div class="card">
       <label id="insumo">¿Qué insumo?</label>
       <div class="cuadros dos" role="group" aria-labelledby="insumo">${opciones}</div>
-      <label for="cantidad">Cantidad</label>
-      <input id="cantidad" type="text" inputmode="numeric" value="${esc(f.cantidad)}" placeholder="10">
+      ${resumen}
       <label for="nota">Nota (opcional)</label>
       <input id="nota" type="text" value="${esc(f.nota)}" placeholder="Para qué lo necesitas">
       ${P.formError ? `<div class="aviso mal" style="margin-top:10px">${esc(P.formError)}</div>` : ''}
-      <button class="btn primario" style="margin-top:12px" data-accion="sol-enviar">Enviar solicitud</button>
+      <button class="btn primario" style="margin-top:12px" data-accion="sol-enviar">${textoBotonEnviar()}</button>
     </div>
     ${entregasRancho()}
     <div class="card"><b>Mis solicitudes</b>${historial || '<p class="suave">Aún no has pedido nada.</p>'}</div>`}
@@ -737,18 +757,25 @@ function vistaInsumos() {
 }
 
 async function enviarSolicitud() {
-  const form = { insumo_id: S.ped.form.insumo_id, cantidad: document.getElementById('cantidad').value.trim(), nota: document.getElementById('nota').value.trim() };
-  S.ped.form = form;
-  const err = validarSolicitud(form);
-  if (err) { S.ped.formError = err; render(); return; }
+  const F = S.ped.form;
+  document.querySelectorAll('input[data-cant]').forEach((el) => { F.items[el.dataset.cant] = el.value.trim(); });
+  F.nota = document.getElementById('nota').value.trim();
+  const ids = S.ped.insumos.map((i) => i.id).filter((id) => Object.prototype.hasOwnProperty.call(F.items, id));
+  if (!ids.length) { S.ped.formError = 'Elige al menos un insumo.'; render(); return; }
+  for (const id of ids) {
+    const err = validarSolicitud({ insumo_id: id, cantidad: F.items[id] });
+    if (err) { const ins = S.ped.insumos.find((i) => i.id === id); S.ped.formError = `${ins ? ins.nombre : 'Insumo'}: ${err}`; render(); return; }
+  }
   try {
-    await api.rest('POST', '/solicitudes_insumo', { id: uuid(), rancho_id: S.rancho.id, insumo_id: form.insumo_id, cantidad: Number(form.cantidad), nota: form.nota || null, creado_por: user.id }, { Prefer: 'return=minimal' });
-    S.ped.form = { insumo_id: '', cantidad: '', nota: '' };
+    for (const id of ids) {
+      await api.rest('POST', '/solicitudes_insumo', { id: uuid(), rancho_id: S.rancho.id, insumo_id: id, cantidad: Number(F.items[id]), nota: F.nota || null, creado_por: user.id }, { Prefer: 'return=minimal' });
+      delete F.items[id]; // lo ya enviado no se reenvía si otro falla
+    }
+    S.ped.form = { items: {}, nota: '' };
     S.ped.formError = null;
-    limpiarCampos('cantidad', 'nota');
-    toast('Solicitud enviada');
+    toast(ids.length > 1 ? `${ids.length} solicitudes enviadas` : 'Solicitud enviada');
     await cargarInsumos();
-  } catch (e) { S.ped.formError = msgError(e); render(); }
+  } catch (e) { S.ped.formError = msgError(e) + (ids.some((id) => !Object.prototype.hasOwnProperty.call(F.items, id)) ? ' Lo que ya se envió quedó registrado; revisa "Mis solicitudes".' : ''); render(); }
 }
 
 async function cancelarSolicitud(id) {
@@ -1121,8 +1148,14 @@ $app.addEventListener('click', async (ev) => {
     case 'orden-estado': await cambiarEstadoOrden(el.dataset.id, el.dataset.estado); break;
     case 'tab-atender': S.tabAtender = el.dataset.tab; render(); break;
     case 'orden-vacas': S.ordenVacas = el.dataset.orden; pintarResultados(); break;
-    case 'ins-elegir': S.ped.form.insumo_id = el.dataset.id; S.ped.formError = null; render(); break;
-    case 'sug-usar': S.ped.form.insumo_id = el.dataset.id; document.getElementById('cantidad').value = el.dataset.cant; document.getElementById('nota').value = ''; S.ped.formError = null; render(); document.getElementById('cantidad').scrollIntoView({ block: 'center' }); break;
+    case 'ins-elegir': {
+      const it = S.ped.form.items; const id = el.dataset.id;
+      if (Object.prototype.hasOwnProperty.call(it, id)) delete it[id]; else it[id] = '';
+      S.ped.formError = null; render();
+      const campo = document.getElementById(`cant-${id}`); if (campo) campo.focus();
+      break;
+    }
+    case 'sug-usar': S.ped.form.items[el.dataset.id] = el.dataset.cant; S.ped.formError = null; render(); { const c = document.getElementById(`cant-${el.dataset.id}`); if (c) c.scrollIntoView({ block: 'center' }); } break;
     case 'corte-guardar': await guardarCorte(); break;
     case 'est-guardar': await guardarEstimacion(el.dataset.id); break;
     case 'corte-toggle': S.asoc.corteAbierto = !S.asoc.corteAbierto; S.asoc.corteError = null; render(); break;
@@ -1146,6 +1179,12 @@ $app.addEventListener('input', (ev) => {
     S.asoc.recep.valores[ev.target.dataset.rec] = ev.target.value;
     const prev = document.getElementById('repartoPrev');
     if (prev) prev.innerHTML = textoReparto(S.asoc.recep.ordenId, S.asoc.recep.valores);
+    return;
+  }
+  if (ev.target.dataset && ev.target.dataset.cant && S.ped) {
+    if (Object.prototype.hasOwnProperty.call(S.ped.form.items, ev.target.dataset.cant)) S.ped.form.items[ev.target.dataset.cant] = ev.target.value;
+    const r = document.getElementById('resumenPedido'); if (r) r.outerHTML = htmlResumenPedido();
+    const bt = document.querySelector('[data-accion="sol-enviar"]'); if (bt) bt.textContent = textoBotonEnviar();
     return;
   }
   if (ev.target.id === 'arete') { S.reg.arete = ev.target.value; pintarResultados(); }
