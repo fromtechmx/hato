@@ -126,3 +126,5 @@ Se ajustan en `UMBRALES` y `PARAMS` de `lib.js`.
 - El botón de regreso de la ficha vuelve a la lista de donde se abrió.
 
 - **Números del panel tocables**: en la tarjeta de cada rancho, "Toca diagnóstico", "Parto próximo" y "Celo, abiertas o listas" (si son mayores que cero) abren solo esas vacas, con el aviso "Mostrando N vaca(s)" y el botón "Ver todas". Al abrir una ficha y volver, el filtro se conserva.
+
+- **Cuadros de vacas más compactos**: la cuadrícula se ajusta al ancho de la pantalla (cuadros de al menos 64 px): 5 por fila en un teléfono de 390 px, 4 en uno de 360 px y 8 o más en pantalla ancha. Para cambiar la densidad, modificar `minmax(64px, 1fr)` en `.cuadros` (index.html).

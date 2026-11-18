@@ -225,7 +225,7 @@ function listaVacas(lista) {
 function etiquetaPorVer(est) {
   switch (est.codigo) {
     case 'diagnosticar': return `Diag. · ${est.dias} d`;
-    case 'parto_proximo': return est.partoEsperado ? `Parto ${fechaCorta(est.partoEsperado)}` : 'Parto próximo';
+    case 'parto_proximo': return est.partoEsperado ? `Parto ${fechaCorta(est.partoEsperado).replace(/ \d{4}$/, '')}` : 'Parto próximo';
     case 'abierta': case 'lista': return est.dias !== null ? `${ETIQUETA_CORTA[est.codigo]} · ${est.dias} d` : ETIQUETA_CORTA[est.codigo];
     default: return ETIQUETA_CORTA[est.codigo] || est.texto;
   }

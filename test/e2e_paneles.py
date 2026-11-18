@@ -116,7 +116,7 @@ try:
         check(aretes[:4] == ['1', '2', '3', '4'] and aretes.index('9') < aretes.index('10') < aretes.index('57'), 'ordenadas por número (9 antes que 10, no alfabético)')
         check('60 vacas' in page.inner_text('main') and 'por atender' in page.inner_text('main'), 'dice cuántas vacas son y cuántas por atender')
         box = page.locator('.cuadro').first.bounding_box()
-        check(box['height'] >= 56 and box['width'] >= 80, f'cuadros con tamaño táctil suficiente ({box["width"]:.0f}×{box["height"]:.0f})')
+        check(box['height'] >= 56 and box['width'] >= 60, f'cuadros con tamaño táctil suficiente ({box["width"]:.0f}×{box["height"]:.0f})')
         page.fill('#arete', '5')
         filtradas = page.eval_on_selector_all('.cuadro b', 'els => els.map(e => e.textContent)')
         check(all('5' in a for a in filtradas) and len(filtradas) < 60 and '57' in filtradas, f'al escribir se filtra ({len(filtradas)} vacas con 5)')
