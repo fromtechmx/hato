@@ -35,6 +35,7 @@ const S = {
   ped: null,
   ordenVacas: 'numero',
   tabAtender: 'ver',
+  grupoAtender: null,
   fichaDesde: 'vacas',
   asoc: null,
 };
@@ -232,17 +233,21 @@ function etiquetaPorVer(est) {
 
 function vistaAtender() {
   const C = clasificarHato(S.animales, S.eventos, hoyLocal());
-  const tab = S.tabAtender === 'sin' ? 'sin' : 'ver';
+  const GR = { diagnosticar: ['diagnosticar'], parto_proximo: ['parto_proximo'], celo_abierta_lista: ['celo', 'abierta', 'lista'] };
+  const filtro = S.grupoAtender && GR[S.grupoAtender] ? GR[S.grupoAtender] : null;
+  const tab = filtro ? 'ver' : (S.tabAtender === 'sin' ? 'sin' : 'ver');
+  const gruposVista = filtro ? C.grupos.filter((g) => filtro.includes(g.codigo)) : C.grupos;
+  const nFiltro = gruposVista.reduce((n, g) => n + g.vacas.length, 0);
   const nSin = C.sinDatos.length;
-  const botones = `<div class="fila" style="gap:8px;margin:0 0 12px">
+  const botones = filtro ? `<div class="aviso info" style="display:flex;gap:10px;align-items:center;justify-content:space-between"><span>Mostrando ${esc(nFiltro)} vaca(s): ${esc(gruposVista.map((g) => g.titulo.toLowerCase()).join(', '))}</span><button class="btn chico" style="margin:0;width:auto" data-accion="atender-todas">Ver todas</button></div>` : `<div class="fila" style="gap:8px;margin:0 0 12px">
     <button class="btn chico ${tab === 'ver' ? 'sel' : ''}" style="margin:0" data-accion="tab-atender" data-tab="ver">Por ver (${C.totalPorVer})</button>
     <button class="btn chico ${tab === 'sin' ? 'sel' : ''}" style="margin:0" data-accion="tab-atender" data-tab="sin">Sin datos (${nSin})</button></div>`;
   let cuerpo;
   if (tab === 'ver') {
-    cuerpo = C.totalPorVer
-      ? C.grupos.map((g) => `<div style="margin:14px 0 6px"><b>${esc(g.titulo)} (${g.vacas.length})</b>${g.nota ? `<span class="suave"> · ${esc(g.nota)}</span>` : ''}</div>
+    cuerpo = nFiltro || (!filtro && C.totalPorVer)
+      ? gruposVista.map((g) => `<div style="margin:14px 0 6px"><b>${esc(g.titulo)} (${g.vacas.length})</b>${g.nota ? `<span class="suave"> · ${esc(g.nota)}</span>` : ''}</div>
           <div class="cuadros">${g.vacas.map((v) => cuadroVaca(v.a, 'ficha', etiquetaPorVer(v.est), v.dudosa)).join('')}</div>`).join('')
-        + (C.grupos.some((g) => g.vacas.some((v) => v.dudosa)) ? '<p class="suave" style="margin-top:12px">Los cuadros con borde punteado tienen un dato dudoso: míralos también en “Sin datos”.</p>' : '')
+        + (gruposVista.some((g) => g.vacas.some((v) => v.dudosa)) ? '<p class="suave" style="margin-top:12px">Los cuadros con borde punteado tienen un dato dudoso: míralos también en “Sin datos”.</p>' : '')
       : '<p class="suave">Nada por ver según los registros. 🎉</p>';
   } else {
     cuerpo = nSin
@@ -392,7 +397,8 @@ function render() {
   if (S.vista === 'registro' && S.reg && S.reg.paso === 1) { pintarResultados(); }
 }
 
-function ir(vista) {
+function ir(vista, conservarFiltro = false) {
+  if (vista === 'atender' && S.vista !== 'ficha' && !conservarFiltro) S.grupoAtender = null;
   S.vista = vista;
   S.aviso = null;
   if (vista !== 'vacas') S.filtro = '';
@@ -516,15 +522,20 @@ function textoDato(res) {
   return `hace ${res.diasSinDatos} días`;
 }
 
+function metricaVaca(p, grupo, n, texto) {
+  if (!n) return `<div><b>${n}</b><span>${esc(texto)}</span></div>`;
+  return `<button class="metrica" data-accion="panel-grupo" data-id="${esc(p.rancho.id)}" data-grupo="${grupo}" aria-label="${esc(n)} ${esc(texto)}: ver cuáles son"><b>${n}</b><span>${esc(texto)}</span><span class="ver">Ver cuáles ›</span></button>`;
+}
+
 function vistaPanel() {
   const tarjetas = S.panel.map((p) => {
     const viejo = p.res.diasSinDatos !== null && p.res.diasSinDatos > UMBRALES.diasSinDatos;
     return `<div class="card">
       <div class="fila"><b>${esc(p.rancho.nombre)}</b><span class="estado ${claseRec(p.rec.codigo)}">${esc(p.rec.texto)}</span></div>
       <div class="metricas">
-        <div><b>${p.res.diagnosticar}</b><span>Toca diagnóstico</span></div>
-        <div><b>${p.res.partoProximo}</b><span>Parto próximo</span></div>
-        <div><b>${p.res.celo + p.res.abiertas + p.res.listas}</b><span>Celo, abiertas o listas</span></div>
+        ${metricaVaca(p, 'diagnosticar', p.res.diagnosticar, 'Toca diagnóstico')}
+        ${metricaVaca(p, 'parto_proximo', p.res.partoProximo, 'Parto próximo')}
+        ${metricaVaca(p, 'celo_abierta_lista', p.res.celo + p.res.abiertas + p.res.listas, 'Celo, abiertas o listas')}
         <div><b class="${viejo ? 'rojo' : ''}" style="font-size:18px">${esc(textoDato(p.res))}</b><span>Último dato</span></div>
       </div>
       <p class="suave" style="margin:8px 0">${esc(p.rec.motivo)}</p>
@@ -1021,7 +1032,9 @@ $app.addEventListener('click', async (ev) => {
     }
     case 'reingresar': S.loginEmail = (api.getSession() || { user: {} }).user.email || ''; user = null; render(); break;
     case 'salir': await salir(); break;
-    case 'panel-abrir': { const r = S.ranchos.find((x) => x.id === el.dataset.id); if (r) { S.rancho = r; S.tabAtender = 'ver'; await store.setMeta('ranchoActivo', r.id); await refrescar(); ir('atender'); } break; }
+    case 'panel-grupo': { const r = S.ranchos.find((x) => x.id === el.dataset.id); if (r) { S.rancho = r; S.tabAtender = 'ver'; S.grupoAtender = el.dataset.grupo; await store.setMeta('ranchoActivo', r.id); await refrescar(); ir('atender', true); } break; }
+    case 'atender-todas': S.grupoAtender = null; render(); break;
+    case 'panel-abrir': { const r = S.ranchos.find((x) => x.id === el.dataset.id); if (r) { S.rancho = r; S.tabAtender = 'ver'; S.grupoAtender = null; await store.setMeta('ranchoActivo', r.id); await refrescar(); ir('atender'); } break; }
     case 'abrir-insumos': await abrirInsumos(); break;
     case 'sol-enviar': await enviarSolicitud(); break;
     case 'sol-cancelar': await cancelarSolicitud(el.dataset.id); break;

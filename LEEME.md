@@ -124,3 +124,5 @@ Se ajustan en `UMBRALES` y `PARAMS` de `lib.js`.
 - La tarjeta del rancho en el panel muestra "N vaca(s) sin datos o con datos que no cuadran" si las hay.
 - Los umbrales (120 y 21 días) son PROVISIONALES: validarlos con un MVZ. "Sin datos" no distingue entre una vaca olvidada y una vaca que ya no está; por eso la acción sugerida es averiguar y registrar (descarte si ya no está).
 - El botón de regreso de la ficha vuelve a la lista de donde se abrió.
+
+- **Números del panel tocables**: en la tarjeta de cada rancho, "Toca diagnóstico", "Parto próximo" y "Celo, abiertas o listas" (si son mayores que cero) abren solo esas vacas, con el aviso "Mostrando N vaca(s)" y el botón "Ver todas". Al abrir una ficha y volver, el filtro se conserva.
