@@ -108,6 +108,19 @@ try:
         # ---------- Ganadero (dueño): pide y cancela ----------
         ctx, page, errs = entrar(br, 'ganadero@test.invalid')
         check('Panel del veterinario' not in page.inner_text('main') and 'Panel de la asociación' not in page.inner_text('main'), 'el ganadero no ve paneles de veterinario ni asociación')
+        # ---- Mis vacas: agrupadas por estado, en cuadros ----
+        page.click('text=Mis vacas'); page.wait_for_selector('.cuadros')
+        page.screenshot(path='/tmp/hato_mis_vacas.png', full_page=False)
+        mv = page.inner_text('#lista')
+        check(page.locator('#lista .cuadro').count() == 60, 'Mis vacas muestra las 60 en cuadros')
+        check('En celo: inseminar (2)' in mv and 'Servidas: esperando diagnóstico (1)' in mv and 'Gestantes (57)' in mv, 'agrupadas: 2 en celo, 1 servida, 57 gestantes')
+        check(mv.index('En celo') < mv.index('Servidas') < mv.index('Gestantes'), 'las que hay que ver van antes que las gestantes')
+        page.fill('#filtro', '57')
+        check(page.locator('#lista .cuadro').count() == 1 and 'Gestantes (1)' in page.inner_text('#lista'), 'el buscador filtra dentro de los grupos')
+        page.fill('#filtro', '')
+        page.click('#lista .cuadro >> nth=0'); page.wait_for_selector('text=Historial')
+        page.click('text=‹ Mis vacas'); page.wait_for_selector('.cuadros')
+        page.click('text=‹ Inicio')
         # ---- registrar: la vaca se elige en cuadros ----
         page.click('text=Registrar evento'); page.wait_for_selector('.cuadros')
         n = page.locator('.cuadro').count()

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clasificarHato, motivoSinDatos, estadoVaca, resumenRancho } from '../lib.js';
+import { agruparTodas, clasificarHato, motivoSinDatos, estadoVaca, resumenRancho } from '../lib.js';
 
 const hoy = '2026-11-18';
 const A = (id, arete) => ({ id, arete: arete ?? id });
@@ -75,4 +75,29 @@ test('anulaciones: un registro anulado no cuenta como movimiento', () => {
   assert.equal(motivoSinDatos(est, [...evs, anul], hoy).tipo, 'sin_movimiento');
   const est2 = estadoVaca(evs, hoy);
   assert.equal(motivoSinDatos(est2, evs, hoy), null, 'sin la anulación, la nota de hace 5 días sí cuenta como movimiento');
+});
+
+test('agruparTodas: todas las vacas, por estado, alertas primero; nadie se pierde ni se repite', () => {
+  const g = agruparTodas(animales, eventos, hoy);
+  assert.deepEqual(g.map((x) => x.titulo), ['Toca diagnóstico', 'Parto próximo', 'En celo: inseminar', 'Vacías (abiertas)', 'Listas para servicio', 'Gestantes', 'Sin datos', 'Descartadas']);
+  const todas = g.flatMap((x) => x.vacas.map((v) => v.a.id));
+  assert.equal(todas.length, animales.length);
+  assert.equal(new Set(todas).size, animales.length);
+  assert.deepEqual(g.find((x) => x.titulo === 'Sin datos').vacas.map((v) => v.a.arete), ['20', '21'], 'sin registros y solo notas, por número');
+  // el grupo de diagnóstico mantiene el orden por urgencia
+  assert.deepEqual(g[0].vacas.map((v) => v.a.arete), ['10', '1', '40', '9']);
+});
+test('agruparTodas: servidas, posparto y gestantes ordenadas', () => {
+  const an = ['s1', 's2', 'p1', 'p2', 'g1', 'g2'].map((id) => A(id));
+  const ev2 = [
+    ev('s1', 'inseminacion', dias(5)), ev('s2', 'inseminacion', dias(20)),
+    ev('p1', 'parto', dias(3)), ev('p2', 'parto', dias(30)),
+    ev('g1', 'inseminacion', dias(100)), ev('g1', 'diagnostico', dias(60), { resultado: 'prenada' }),
+    ev('g2', 'inseminacion', dias(150)), ev('g2', 'diagnostico', dias(110), { resultado: 'prenada' }),
+  ];
+  const g = agruparTodas(an, ev2, hoy);
+  const por = Object.fromEntries(g.map((x) => [x.codigo, x.vacas.map((v) => v.a.id)]));
+  assert.deepEqual(por.servida, ['s2', 's1'], 'la servida hace 20 días está más cerca del diagnóstico');
+  assert.deepEqual(por.posparto, ['p2', 'p1']);
+  assert.deepEqual(por.gestante, ['g2', 'g1'], 'la de parto más cercano primero');
 });

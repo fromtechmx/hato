@@ -454,3 +454,34 @@ export function clasificarHato(animales, eventos, hoy, P = PARAMS, U = UMBRALES)
   const sinDatos = filas.filter((f) => f.motivo).sort((x, y) => x.motivo.orden - y.motivo.orden || (y.motivo.dias ?? 0) - (x.motivo.dias ?? 0) || num(x, y));
   return { grupos, totalPorVer: grupos.reduce((n, g) => n + g.vacas.length, 0), sinDatos };
 }
+
+const GRUPOS_TODAS = [
+  ...GRUPOS_POR_VER,
+  { codigo: 'servida', titulo: 'Servidas: esperando diagnóstico', nota: 'las más cerca del diagnóstico primero' },
+  { codigo: 'posparto', titulo: 'Posparto', nota: '' },
+  { codigo: 'gestante', titulo: 'Gestantes', nota: 'el parto más cercano primero' },
+  { codigo: ['sin_datos', 'sin_estado'], titulo: 'Sin datos', nota: '' },
+  { codigo: 'descartada', titulo: 'Descartadas', nota: '' },
+];
+
+/** Todas las vacas del rancho agrupadas por estado (primero las que hay que ver, luego el resto). Mismo orden y reglas que clasificarHato. */
+export function agruparTodas(animales, eventos, hoy, P = PARAMS) {
+  const porVaca = new Map();
+  for (const e of eventos) {
+    if (!porVaca.has(e.animal_id)) porVaca.set(e.animal_id, []);
+    porVaca.get(e.animal_id).push(e);
+  }
+  const num = (x, y) => x.a.arete.localeCompare(y.a.arete, 'es', { numeric: true });
+  const filas = animales.map((a) => ({ a, est: estadoVaca(porVaca.get(a.id) || [], hoy, P) }));
+  const masDias = (x, y) => (y.est.dias ?? 0) - (x.est.dias ?? 0) || num(x, y);
+  const urgencia = {
+    diagnosticar: masDias, abierta: masDias, lista: masDias, servida: masDias, posparto: masDias,
+    parto_proximo: (x, y) => String(x.est.partoEsperado).localeCompare(String(y.est.partoEsperado)) || num(x, y),
+    gestante: (x, y) => String(x.est.partoEsperado ?? '9').localeCompare(String(y.est.partoEsperado ?? '9')) || num(x, y),
+  };
+  return GRUPOS_TODAS.map((g) => {
+    const codigos = Array.isArray(g.codigo) ? g.codigo : [g.codigo];
+    const orden = urgencia[codigos[0]] || num;
+    return { ...g, codigo: codigos[0], vacas: filas.filter((f) => codigos.includes(f.est.codigo)).sort(orden) };
+  }).filter((g) => g.vacas.length);
+}

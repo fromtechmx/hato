@@ -45,10 +45,10 @@ try:
 
         # 2) Lista de vacas y estado derivado
         page.click('text=Mis vacas')
-        page.wait_for_selector('.vaca')
+        page.wait_for_selector('.cuadro')
         txt = page.inner_text('#lista')
         check('101' in txt and '202' in txt and '999' not in txt, 'lista de vacas correcta')
-        check('toca diagnóstico' in txt, 'la 101 (servida hace 35 días) aparece "toca diagnóstico"')
+        check('Toca diagnóstico' in txt and 'Diag. · 35 d' in txt, 'la 101 (servida hace 35 días) aparece en “Toca diagnóstico”, con sus días')
         page.click('text=‹ Inicio')
 
         # 3) Esperar a que el service worker controle la página (para poder abrir sin conexión)
@@ -82,7 +82,7 @@ try:
         page.wait_for_selector('text=Registrar evento')
         check('3 por enviar' in page.inner_text('#chip') or '⏳' in page.inner_text('#chip'), 'tras recargar sin conexión, siguen los pendientes')
         page.click('text=Mis vacas')
-        page.wait_for_selector('.vaca')
+        page.wait_for_selector('.cuadro')
         check('303' in page.inner_text('#lista'), 'la vaca nueva sigue ahí tras recargar sin conexión')
         page.click('text=‹ Inicio')
 
@@ -105,7 +105,7 @@ try:
         # 8) Deshacer un registro ya enviado crea una anulación
         page.click('text=‹ Inicio')
         page.click('text=Mis vacas')
-        page.click('.vaca:has-text("303")')
+        page.click('.cuadro:has-text("303")')
         page.wait_for_selector('text=Historial')
         page.click('text=Deshacer >> nth=0')
         page.wait_for_selector('.ev.anulado')

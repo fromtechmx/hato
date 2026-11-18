@@ -132,3 +132,5 @@ Se ajustan en `UMBRALES` y `PARAMS` de `lib.js`.
 ## Publicación (GitHub Pages)
 
 La app vive en la **raíz** del repositorio (GitHub Pages sirve la raíz). No poner la app en una subcarpeta `app/`: el sitio no la vería. Las pruebas (`test/`) funcionan desde la raíz: `cd test && node --test` y `python3 test/e2e_paneles.py`.
+
+- **Mis vacas** (todas las vacas del rancho) ahora se ve igual que "Por atender": cuadros agrupados por estado, primero lo que hay que ver (diagnóstico, parto próximo, celo, vacías, listas) y luego servidas, posparto, gestantes, sin datos y descartadas. El buscador filtra dentro de los grupos y el botón de regreso de la ficha vuelve a esta lista.

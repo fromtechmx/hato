@@ -1,6 +1,6 @@
 // HATO · app. Pantallas y flujo. Todo se guarda primero en el teléfono; se envía cuando hay conexión.
 
-import { PARAMS, TIPOS, textoTipo, uuid, hoyLocal, sumarDias, fechaCorta, normArete, validarEvento, eventosVigentes, estadoVaca, tipoSugerido, ordenarTipos, UMBRALES, resumenRancho, recomendarVisita, agruparSolicitudes, validarSolicitud, repartir, lineasDeEntrega, clasificarHato, cortesAlrededor, acumuladoCiclo, textoFalta, textoCorte, resumenCorte, necesidadSemana, DIAS_SEMANA } from './lib.js';
+import { PARAMS, TIPOS, textoTipo, uuid, hoyLocal, sumarDias, fechaCorta, normArete, validarEvento, eventosVigentes, estadoVaca, tipoSugerido, ordenarTipos, UMBRALES, resumenRancho, recomendarVisita, agruparSolicitudes, validarSolicitud, repartir, lineasDeEntrega, clasificarHato, agruparTodas, cortesAlrededor, acumuladoCiclo, textoFalta, textoCorte, resumenCorte, necesidadSemana, DIAS_SEMANA } from './lib.js';
 import { openIdbStore } from './store.js';
 import { createApi } from './api.js';
 import { createSync } from './sync.js';
@@ -203,30 +203,33 @@ function pie() {
   return `<p class="pie">${esc(user ? user.email : '')}<br><button class="atras" data-accion="salir">Cerrar sesión</button><br>HATO · by FROM TECH 4D</p>`;
 }
 
-function vistaVacas() {
+function htmlVacasAgrupadas() {
   const q = normArete(S.filtro);
-  let lista = S.animales.filter((a) => !q || a.arete.includes(q));
-  lista = lista.sort((a, b) => S.estados.get(a.id).prioridad - S.estados.get(b.id).prioridad || a.arete.localeCompare(b.arete, 'es', { numeric: true }));
+  const animales = S.animales.filter((x) => !q || x.arete.includes(q));
+  if (!animales.length) return `<p class="suave">No hay vacas${q ? ' con ese arete' : ' registradas todavía'}.</p>`;
+  const evs = new Set(animales.map((x) => x.id));
+  const grupos = agruparTodas(animales, S.eventos.filter((e) => evs.has(e.animal_id)), hoyLocal());
+  return grupos.map((g) => `<div style="margin:14px 0 6px"><b>${esc(g.titulo)} (${g.vacas.length})</b>${g.nota ? `<span class="suave"> · ${esc(g.nota)}</span>` : ''}</div>
+    <div class="cuadros">${g.vacas.map((v) => cuadroVaca(v.a, 'ficha', etiquetaPorVer(v.est))).join('')}</div>`).join('');
+}
+
+function vistaVacas() {
+  const alertas = S.animales.filter((x) => S.estados.get(x.id).alerta).length;
   return marco(`
     <button class="atras" data-accion="ir" data-vista="inicio">‹ Inicio</button>
     <h2>Mis vacas (${S.animales.length})</h2>
     <input type="text" id="filtro" placeholder="Buscar por arete" autocomplete="off" autocapitalize="characters" value="${esc(S.filtro)}">
-    <div id="lista" style="margin-top:12px">${listaVacas(lista)}</div>`);
+    ${alertas ? `<p class="suave" style="margin:8px 0 0">${alertas} por atender (borde naranja). Toca una vaca para ver su historial.</p>` : '<p class="suave" style="margin:8px 0 0">Toca una vaca para ver su historial.</p>'}
+    <div id="lista">${htmlVacasAgrupadas()}</div>`);
 }
 
-function listaVacas(lista) {
-  if (!lista.length) return `<p class="suave">No hay vacas${S.filtro ? ' con ese arete' : ' registradas todavía'}.</p>`;
-  return lista.map((a) => {
-    const est = S.estados.get(a.id);
-    return `<button class="vaca" data-accion="ficha" data-id="${esc(a.id)}"><div class="fila"><span class="arete">${esc(a.arete)}</span>${estadoChip(est)}</div>${est.detalle ? `<div class="suave">${esc(est.detalle)}</div>` : ''}${a._sync !== 'ok' ? '<span class="badge pend">⏳ por enviar</span>' : ''}</button>`;
-  }).join('');
-}
 
 function etiquetaPorVer(est) {
   switch (est.codigo) {
     case 'diagnosticar': return `Diag. · ${est.dias} d`;
     case 'parto_proximo': return est.partoEsperado ? `Parto ${fechaCorta(est.partoEsperado).replace(/ \d{4}$/, '')}` : 'Parto próximo';
-    case 'abierta': case 'lista': return est.dias !== null ? `${ETIQUETA_CORTA[est.codigo]} · ${est.dias} d` : ETIQUETA_CORTA[est.codigo];
+    case 'abierta': case 'lista': case 'posparto': case 'servida': return est.dias !== null ? `${ETIQUETA_CORTA[est.codigo]} · ${est.dias} d` : ETIQUETA_CORTA[est.codigo];
+    case 'gestante': return est.partoEsperado ? `Parto ${fechaCorta(est.partoEsperado).replace(/ \d{4}$/, '')}` : 'Gestante';
     default: return ETIQUETA_CORTA[est.codigo] || est.texto;
   }
 }
@@ -429,7 +432,7 @@ const ETIQUETA_CORTA = { sin_datos: 'Sin datos', diagnosticar: 'Diagnóstico', s
 function cuadroVaca(a, accion = 'elegir', etiqueta = null, dudosa = false) {
   const est = S.estados.get(a.id);
   const cls = (est && est.alerta ? 'alerta' : est && est.codigo === 'descartada' ? 'apagada' : '') + (dudosa ? ' dudosa' : '');
-  return `<button class="cuadro ${cls}" data-accion="${accion}" data-id="${esc(a.id)}" aria-label="Vaca ${esc(a.arete)}, ${esc(est ? est.texto : '')}${dudosa ? ', revisar el dato' : ''}"><b>${esc(a.arete)}</b><small>${esc(etiqueta || (est ? (ETIQUETA_CORTA[est.codigo] || est.texto) : ''))}</small></button>`;
+  return `<button class="cuadro ${cls}" data-accion="${accion}" data-id="${esc(a.id)}" aria-label="Vaca ${esc(a.arete)}, ${esc(est ? est.texto : '')}${dudosa ? ', revisar el dato' : ''}"><b>${esc(a.arete)}</b><small>${esc(etiqueta || (est ? (ETIQUETA_CORTA[est.codigo] || est.texto) : ''))}${a._sync && a._sync !== 'ok' ? ' ⏳' : ''}</small></button>`;
 }
 
 function pintarResultados() {
@@ -1068,9 +1071,7 @@ $app.addEventListener('input', (ev) => {
   if (ev.target.id === 'arete') { S.reg.arete = ev.target.value; pintarResultados(); }
   else if (ev.target.id === 'filtro') {
     S.filtro = ev.target.value;
-    const q = normArete(S.filtro);
-    const lista = S.animales.filter((a) => !q || a.arete.includes(q)).sort((a, b) => S.estados.get(a.id).prioridad - S.estados.get(b.id).prioridad || a.arete.localeCompare(b.arete, 'es', { numeric: true }));
-    document.getElementById('lista').innerHTML = listaVacas(lista);
+    document.getElementById('lista').innerHTML = htmlVacasAgrupadas();
   }
 });
 
