@@ -6,6 +6,7 @@ import { MockSupabase } from './mock-supabase.mjs';
 
 const APP = path.resolve(new URL('../app', import.meta.url).pathname);
 const mock = new MockSupabase();
+mock.relojReal = true; // las solicitudes se crean "ahora", para que el ciclo de corte no dependa del día en que se corre la prueba
 const COOP = 'Coop Sintética';
 const vet = mock.crearUsuario('vet@test.invalid', 'clave-de-prueba');
 const ganadero = mock.crearUsuario('ganadero@test.invalid', 'clave-de-prueba');

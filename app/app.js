@@ -1,6 +1,6 @@
 // HATO · app. Pantallas y flujo. Todo se guarda primero en el teléfono; se envía cuando hay conexión.
 
-import { PARAMS, TIPOS, textoTipo, uuid, hoyLocal, sumarDias, fechaCorta, normArete, validarEvento, eventosVigentes, estadoVaca, tipoSugerido, ordenarTipos, UMBRALES, resumenRancho, recomendarVisita, agruparSolicitudes, validarSolicitud, repartir, lineasDeEntrega, cortesAlrededor, textoFalta, textoCorte, resumenCorte, necesidadSemana, DIAS_SEMANA } from './lib.js';
+import { PARAMS, TIPOS, textoTipo, uuid, hoyLocal, sumarDias, fechaCorta, normArete, validarEvento, eventosVigentes, estadoVaca, tipoSugerido, ordenarTipos, UMBRALES, resumenRancho, recomendarVisita, agruparSolicitudes, validarSolicitud, repartir, lineasDeEntrega, cortesAlrededor, acumuladoCiclo, textoFalta, textoCorte, resumenCorte, necesidadSemana, DIAS_SEMANA } from './lib.js';
 import { openIdbStore } from './store.js';
 import { createApi } from './api.js';
 import { createSync } from './sync.js';
@@ -589,18 +589,28 @@ function bloqueCorte(corte) {
 function sugerenciaRancho() {
   const P = S.ped;
   if (!P || !S.animales) return '';
-  const pendientes = new Map();
-  for (const x of P.solicitudes) if (x.estado === 'pendiente') pendientes.set(x.insumo_id, (pendientes.get(x.insumo_id) || 0) + x.cantidad);
-  const sug = necesidadSemana(S.animales, S.eventos, hoyLocal(), P.insumos, pendientes);
-  if (!sug.length) return '';
+  const ahora = new Date();
+  // "ya pedido" = acumulado del ciclo (desde el último corte), pendiente o ya consolidado; sin corte configurado, solo lo pendiente
+  let acumulado;
+  if (P.corte) acumulado = acumuladoCiclo(P.solicitudes, ahora, P.corte.dia, P.corte.hora);
+  else { acumulado = new Map(); for (const x of P.solicitudes) if (x.estado === 'pendiente') acumulado.set(x.insumo_id, (acumulado.get(x.insumo_id) || 0) + x.cantidad); }
+  const sug = necesidadSemana(S.animales, S.eventos, hoyLocal(), P.insumos, acumulado);
   const ult = resumenRancho(S.animales, S.eventos, hoyLocal());
   const sinDatos = ult.diasSinDatos !== null && ult.diasSinDatos > UMBRALES.diasSinDatos;
-  return `<div class="card"><b>Lo que podrías necesitar esta semana</b>
+  const desde = P.corte ? cortesAlrededor(ahora, P.corte.dia, P.corte.hora).ultimo : null;
+  const tarjetaSug = sug.length ? `<div class="card"><b>Lo que podrías necesitar esta semana</b>
     <p class="suave" style="margin:4px 0 8px">Estimación según tus vacas y los factores de tu cooperativa. Es una guía: tú decides cuánto pedir.${sinDatos ? ` <b>Ojo: tu último registro tiene ${esc(ult.diasSinDatos)} días; la estimación puede estar baja.</b>` : ''}</p>
     ${sug.map((x) => `<div class="ev"><div class="fila"><b>${esc(x.nombre)}: ${esc(x.sugerida)} ${esc(x.unidad)}</b></div>
-      <span class="suave">${esc(x.vacas)} ${x.base === 'servicio' ? 'vacas por servir' : 'vacas por diagnosticar'} × ${esc(x.factor)}${x.ya ? ` · ya pediste ${esc(x.ya)}` : ''}</span>
-      ${x.faltante > 0 ? `<div><button class="btn chico" style="margin-top:6px" data-accion="sug-usar" data-id="${esc(x.insumo_id)}" data-cant="${esc(x.faltante)}">Pedir ${esc(x.faltante)}</button></div>` : '<div class="suave" style="margin-top:4px">Ya cubierto con lo que pediste.</div>'}</div>`).join('')}</div>`;
+      <span class="suave">${esc(x.vacas)} ${x.base === 'servicio' ? 'vacas por servir' : 'vacas por diagnosticar'} × ${esc(x.factor)} · ya pediste ${esc(x.ya)} en este ciclo</span>
+      ${x.faltante > 0 ? `<div><button class="btn chico" style="margin-top:6px" data-accion="sug-usar" data-id="${esc(x.insumo_id)}" data-cant="${esc(x.faltante)}">Pedir ${esc(x.faltante)} (lo que falta)</button></div>` : '<div class="suave" style="margin-top:4px">Ya cubierto con lo que pediste.</div>'}</div>`).join('')}</div>` : '';
+  const filas = [...acumulado.entries()].map(([id, n]) => { const i = P.insumos.find((q) => q.id === id) || { nombre: 'Insumo', unidad: '' }; return { nombre: i.nombre, unidad: i.unidad, n }; }).sort((x, y) => x.nombre.localeCompare(y.nombre, 'es'));
+  const tarjetaAcum = P.corte ? `<div class="card"><b>Acumulado de este ciclo</b>
+    <p class="suave" style="margin:4px 0 8px">Lo que has pedido desde el último corte (${esc(fechaCorta(hoyLocalDe(desde)))} ${esc(String(P.corte.hora).padStart(2, '0'))}:00), ya sea pendiente o incluido en una compra.</p>
+    ${filas.length ? filas.map((f) => `<div class="fila" style="padding:6px 0;border-top:1px solid var(--linea)"><span>${esc(f.nombre)}</span><b>${esc(f.n)} ${esc(f.unidad)}</b></div>`).join('') : '<p class="suave" style="margin:0">Todavía no has pedido nada en este ciclo.</p>'}</div>` : '';
+  return tarjetaSug + tarjetaAcum;
 }
+
+function hoyLocalDe(d) { return hoyLocal(d); }
 
 function vistaInsumos() {
   const P = S.ped || { cargando: true, insumos: [], solicitudes: [], form: {} };

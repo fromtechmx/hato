@@ -201,7 +201,7 @@ export class MockSupabase {
   }
 
   marca() {
-    const ms = AHORA_BASE + (this.empates ? 0 : this.reloj++ * 1000);
+    const ms = (this.relojReal ? Date.now() - 60000 : AHORA_BASE) + (this.empates ? 0 : this.reloj++ * 1000);
     return new Date(ms).toISOString().replace(/\.(\d{3})Z$/, '.$1123+00:00'); // como PostgREST: microsegundos y +00:00
   }
 

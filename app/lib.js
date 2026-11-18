@@ -378,3 +378,16 @@ export function necesidadSemana(animales, eventos, hoy, insumos, pendientes = ne
   }
   return out.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
 }
+
+/** Acumulado de lo solicitado en el ciclo actual (desde el último corte): suma por insumo de las solicitudes no canceladas,
+ * estén pendientes o ya consolidadas (así no "se reinicia" cuando la cooperativa consolida). Map insumo_id → cantidad. */
+export function acumuladoCiclo(solicitudes, ahora, dia, hora) {
+  const { ultimo } = cortesAlrededor(ahora, dia, hora);
+  const out = new Map();
+  for (const s of solicitudes) {
+    if (s.estado === 'cancelada') continue;
+    if (new Date(s.creado_en).getTime() < ultimo.getTime()) continue;
+    out.set(s.insumo_id, (out.get(s.insumo_id) || 0) + s.cantidad);
+  }
+  return out;
+}

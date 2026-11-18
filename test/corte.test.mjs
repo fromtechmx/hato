@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cortesAlrededor, textoFalta, textoCorte, resumenCorte, necesidadSemana } from '../app/lib.js';
+import { acumuladoCiclo, cortesAlrededor, textoFalta, textoCorte, resumenCorte, necesidadSemana } from '../app/lib.js';
 
 const L = (y, m, d, h = 0, mi = 0) => new Date(y, m - 1, d, h, mi, 0, 0);
 // 2026-11-18 es miércoles
@@ -97,4 +97,22 @@ test('necesidadSemana: redondeo hacia arriba y faltante nunca negativo', () => {
 test('necesidadSemana: sin vacas elegibles no sugiere nada', () => {
   const r = necesidadSemana([A('a')], [ev('a', 'inseminacion', '2026-03-01'), ev('a', 'diagnostico', '2026-04-05', { resultado: 'prenada' })], hoy, [{ id: 'p', nombre: 'P', unidad: 'u', estimar_base: 'servicio', estimar_factor: '2' }]);
   assert.deepEqual(r, []);
+});
+
+test('acumuladoCiclo: suma desde el último corte, incluye consolidadas, excluye canceladas y anteriores', () => {
+  const ahora = L(2026, 11, 18, 13);
+  const s = [
+    { insumo_id: 'p', cantidad: 10, estado: 'pendiente', creado_en: L(2026, 11, 17, 9).toISOString() },
+    { insumo_id: 'p', cantidad: 5, estado: 'consolidada', creado_en: L(2026, 11, 12, 9).toISOString() },
+    { insumo_id: 'p', cantidad: 100, estado: 'cancelada', creado_en: L(2026, 11, 17, 9).toISOString() },
+    { insumo_id: 'p', cantidad: 50, estado: 'consolidada', creado_en: L(2026, 11, 11, 17, 59).toISOString() }, // ciclo anterior
+    { insumo_id: 'p', cantidad: 1, estado: 'pendiente', creado_en: L(2026, 11, 11, 18, 0).toISOString() },     // justo en el corte → ciclo actual
+    { insumo_id: 'g', cantidad: 2, estado: 'pendiente', creado_en: L(2026, 11, 18, 8).toISOString() },
+  ];
+  const r = acumuladoCiclo(s, ahora, 3, 18);
+  assert.equal(r.get('p'), 16);
+  assert.equal(r.get('g'), 2);
+  // pasado el corte de hoy, el ciclo se reinicia
+  const despues = acumuladoCiclo(s, L(2026, 11, 18, 18, 1), 3, 18);
+  assert.equal(despues.size, 0);
 });
