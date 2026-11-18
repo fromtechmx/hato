@@ -1,6 +1,6 @@
 // HATO · app. Pantallas y flujo. Todo se guarda primero en el teléfono; se envía cuando hay conexión.
 
-import { PARAMS, TIPOS, textoTipo, uuid, hoyLocal, sumarDias, fechaCorta, normArete, validarEvento, eventosVigentes, estadoVaca, tipoSugerido, ordenarTipos, UMBRALES, resumenRancho, recomendarVisita, agruparSolicitudes, validarSolicitud, repartir, lineasDeEntrega, cortesAlrededor, acumuladoCiclo, textoFalta, textoCorte, resumenCorte, necesidadSemana, DIAS_SEMANA } from './lib.js';
+import { PARAMS, TIPOS, textoTipo, uuid, hoyLocal, sumarDias, fechaCorta, normArete, validarEvento, eventosVigentes, estadoVaca, tipoSugerido, ordenarTipos, UMBRALES, resumenRancho, recomendarVisita, agruparSolicitudes, validarSolicitud, repartir, lineasDeEntrega, clasificarHato, cortesAlrededor, acumuladoCiclo, textoFalta, textoCorte, resumenCorte, necesidadSemana, DIAS_SEMANA } from './lib.js';
 import { openIdbStore } from './store.js';
 import { createApi } from './api.js';
 import { createSync } from './sync.js';
@@ -34,6 +34,8 @@ const S = {
   panel: [],
   ped: null,
   ordenVacas: 'numero',
+  tabAtender: 'ver',
+  fichaDesde: 'vacas',
   asoc: null,
 };
 
@@ -219,13 +221,41 @@ function listaVacas(lista) {
   }).join('');
 }
 
+function etiquetaPorVer(est) {
+  switch (est.codigo) {
+    case 'diagnosticar': return `Diag. · ${est.dias} d`;
+    case 'parto_proximo': return est.partoEsperado ? `Parto ${fechaCorta(est.partoEsperado)}` : 'Parto próximo';
+    case 'abierta': case 'lista': return est.dias !== null ? `${ETIQUETA_CORTA[est.codigo]} · ${est.dias} d` : ETIQUETA_CORTA[est.codigo];
+    default: return ETIQUETA_CORTA[est.codigo] || est.texto;
+  }
+}
+
 function vistaAtender() {
-  const lista = S.animales.filter((a) => S.estados.get(a.id).alerta).sort((a, b) => S.estados.get(a.id).prioridad - S.estados.get(b.id).prioridad || a.arete.localeCompare(b.arete, 'es', { numeric: true }));
+  const C = clasificarHato(S.animales, S.eventos, hoyLocal());
+  const tab = S.tabAtender === 'sin' ? 'sin' : 'ver';
+  const nSin = C.sinDatos.length;
+  const botones = `<div class="fila" style="gap:8px;margin:0 0 12px">
+    <button class="btn chico ${tab === 'ver' ? 'sel' : ''}" style="margin:0" data-accion="tab-atender" data-tab="ver">Por ver (${C.totalPorVer})</button>
+    <button class="btn chico ${tab === 'sin' ? 'sel' : ''}" style="margin:0" data-accion="tab-atender" data-tab="sin">Sin datos (${nSin})</button></div>`;
+  let cuerpo;
+  if (tab === 'ver') {
+    cuerpo = C.totalPorVer
+      ? C.grupos.map((g) => `<div style="margin:14px 0 6px"><b>${esc(g.titulo)} (${g.vacas.length})</b>${g.nota ? `<span class="suave"> · ${esc(g.nota)}</span>` : ''}</div>
+          <div class="cuadros">${g.vacas.map((v) => cuadroVaca(v.a, 'ficha', etiquetaPorVer(v.est), v.dudosa)).join('')}</div>`).join('')
+        + (C.grupos.some((g) => g.vacas.some((v) => v.dudosa)) ? '<p class="suave" style="margin-top:12px">Los cuadros con borde punteado tienen un dato dudoso: míralos también en “Sin datos”.</p>' : '')
+      : '<p class="suave">Nada por ver según los registros. 🎉</p>';
+  } else {
+    cuerpo = nSin
+      ? `<p class="suave" style="margin:0 0 8px">Vacas con registros que no cuadran o sin registros. Averigua qué pasó con cada una (pregunta al encargado, revisa el corral) y regístralo; si ya no está, márcala como descarte. Más urgentes primero.</p>`
+        + C.sinDatos.map((f) => `<button class="vaca" data-accion="ficha" data-id="${esc(f.a.id)}"><div class="fila"><span class="arete">${esc(f.a.arete)}</span>${estadoChip(f.est)}</div><div class="suave">${esc(f.motivo.texto)}</div></button>`).join('')
+      : '<p class="suave">Todas las vacas tienen datos que cuadran. 👍</p>';
+  }
   return marco(`
     <button class="atras" data-accion="ir" data-vista="inicio">‹ Inicio</button>
-    <h2>Por atender (${lista.length})</h2>
-    ${lista.length ? listaVacas(lista) : '<p class="suave">Nada por atender según los registros. 🎉</p>'}
-    <p class="suave">Los avisos salen de reglas sencillas (por ejemplo, diagnóstico a los ${PARAMS.diasDiagnostico} días del servicio). Valídalas con tu veterinario.</p>`);
+    <h2>Por atender</h2>
+    ${botones}
+    ${cuerpo}
+    <p class="suave" style="margin-top:14px">Los avisos salen de reglas sencillas (por ejemplo, diagnóstico a los ${PARAMS.diasDiagnostico} días del servicio; “sin datos” = sin registros, solo notas, más de ${UMBRALES.diasSinMovimiento} días sin movimiento o parto vencido por más de ${UMBRALES.diasPartoVencido} días). Valídalas con tu veterinario.</p>`);
 }
 
 function detalleEvento(e) {
@@ -248,7 +278,7 @@ function badgeSync(o) {
 
 function vistaFicha() {
   const a = S.animales.find((x) => x.id === S.fichaId);
-  if (!a) return marco(`<button class="atras" data-accion="ir" data-vista="vacas">‹ Mis vacas</button><p>No se encontró la vaca.</p>`);
+  if (!a) return marco(`<button class="atras" data-accion="ir" data-vista="${S.fichaDesde === 'atender' ? 'atender' : 'vacas'}">‹ ${S.fichaDesde === 'atender' ? 'Por atender' : 'Mis vacas'}</button><p>No se encontró la vaca.</p>`);
   const est = S.estados.get(a.id);
   const todos = S.eventos.filter((e) => e.animal_id === a.id);
   const anulados = new Set(todos.filter((e) => e.tipo === 'anulacion' && e.anula_a).map((e) => e.anula_a));
@@ -266,7 +296,7 @@ function vistaFicha() {
     </div>`;
   }).join('');
   return marco(`
-    <button class="atras" data-accion="ir" data-vista="vacas">‹ Mis vacas</button>
+    <button class="atras" data-accion="ir" data-vista="${S.fichaDesde === 'atender' ? 'atender' : 'vacas'}">‹ ${S.fichaDesde === 'atender' ? 'Por atender' : 'Mis vacas'}</button>
     <div class="card">
       <div class="fila"><h2 style="margin:0">Vaca ${esc(a.arete)}</h2>${badgeSync(a)}</div>
       <p style="margin:10px 0 4px">${estadoChip(est)}</p>
@@ -390,10 +420,10 @@ function capturarCampos() {
 
 const ETIQUETA_CORTA = { sin_datos: 'Sin datos', diagnosticar: 'Diagnóstico', servida: 'Servida', gestante: 'Gestante', parto_proximo: 'Parto próximo', celo: 'En celo', abierta: 'Vacía', lista: 'Lista', posparto: 'Posparto', descartada: 'Descartada', sin_estado: 'Sin estado' };
 
-function cuadroVaca(a) {
+function cuadroVaca(a, accion = 'elegir', etiqueta = null, dudosa = false) {
   const est = S.estados.get(a.id);
-  const cls = est && est.alerta ? 'alerta' : est && est.codigo === 'descartada' ? 'apagada' : '';
-  return `<button class="cuadro ${cls}" data-accion="elegir" data-id="${esc(a.id)}" aria-label="Vaca ${esc(a.arete)}, ${esc(est ? est.texto : '')}"><b>${esc(a.arete)}</b><small>${esc(est ? (ETIQUETA_CORTA[est.codigo] || est.texto) : '')}</small></button>`;
+  const cls = (est && est.alerta ? 'alerta' : est && est.codigo === 'descartada' ? 'apagada' : '') + (dudosa ? ' dudosa' : '');
+  return `<button class="cuadro ${cls}" data-accion="${accion}" data-id="${esc(a.id)}" aria-label="Vaca ${esc(a.arete)}, ${esc(est ? est.texto : '')}${dudosa ? ', revisar el dato' : ''}"><b>${esc(a.arete)}</b><small>${esc(etiqueta || (est ? (ETIQUETA_CORTA[est.codigo] || est.texto) : ''))}</small></button>`;
 }
 
 function pintarResultados() {
@@ -409,7 +439,7 @@ function pintarResultados() {
   const toggle = S.animales.length > 6 ? `<div class="fila" style="gap:8px;margin:0 0 10px"><button class="btn chico ${S.ordenVacas === 'atencion' ? '' : 'sel'}" style="margin:0" data-accion="orden-vacas" data-orden="numero">Por número</button><button class="btn chico ${S.ordenVacas === 'atencion' ? 'sel' : ''}" style="margin:0" data-accion="orden-vacas" data-orden="atencion">Atención primero</button></div>` : '';
   const nueva = q && !exacta ? `<button class="btn" style="margin-top:12px" data-accion="crear-vaca">➕ Vaca nueva: ${esc(q)}</button>` : '';
   if (!S.animales.length) { cont.innerHTML = `<p class="suave">Aún no hay vacas. Escribe el arete para crear la primera.</p>${nueva}`; return; }
-  cont.innerHTML = `<p class="suave" style="margin:0 0 8px">${q ? `${lista.length} de ${S.animales.length} vacas` : `${S.animales.length} vacas${alertas ? ` · ${alertas} por atender` : ''}`}. Toca la vaca.</p>${toggle}${lista.length ? `<div class="cuadros">${lista.map(cuadroVaca).join('')}</div>` : '<p class="suave">Ninguna vaca con ese número.</p>'}${nueva}`;
+  cont.innerHTML = `<p class="suave" style="margin:0 0 8px">${q ? `${lista.length} de ${S.animales.length} vacas` : `${S.animales.length} vacas${alertas ? ` · ${alertas} por atender` : ''}`}. Toca la vaca.</p>${toggle}${lista.length ? `<div class="cuadros">${lista.map((a) => cuadroVaca(a)).join('')}</div>` : '<p class="suave">Ninguna vaca con ese número.</p>'}${nueva}`;
 }
 
 async function crearVaca() {
@@ -498,7 +528,8 @@ function vistaPanel() {
         <div><b class="${viejo ? 'rojo' : ''}" style="font-size:18px">${esc(textoDato(p.res))}</b><span>Último dato</span></div>
       </div>
       <p class="suave" style="margin:8px 0">${esc(p.rec.motivo)}</p>
-      <button class="btn chico" data-accion="panel-abrir" data-id="${esc(p.rancho.id)}">Ver vacas</button>
+      ${p.res.sinDatosVacas ? `<p style="margin:0 0 8px;color:var(--rojo,#a32020);font-weight:700">${esc(p.res.sinDatosVacas)} vaca(s) sin datos o con datos que no cuadran</p>` : ''}
+      <button class="btn chico" data-accion="panel-abrir" data-id="${esc(p.rancho.id)}">Ver vacas por atender</button>
     </div>`;
   }).join('');
   const proximos = S.panel.filter((p) => p.res.proxima).sort((a, b) => a.res.proxima.fecha.localeCompare(b.res.proxima.fecha));
@@ -979,7 +1010,7 @@ $app.addEventListener('click', async (ev) => {
     case 'op': capturarCampos(); S.reg.datos[el.dataset.campo] = el.dataset.valor; render(); break;
     case 'fecha-rapida': { const f = sumarDias(hoyLocal(), Number(el.dataset.dias)); S.reg.fecha = f; const i = document.getElementById('fecha'); if (i) i.value = f; break; }
     case 'guardar': await guardarEvento(); break;
-    case 'ficha': S.fichaId = el.dataset.id; ir('ficha'); break;
+    case 'ficha': S.fichaId = el.dataset.id; S.fichaDesde = S.vista === 'atender' ? 'atender' : 'vacas'; ir('ficha'); break;
     case 'anular': await anularEvento(el.dataset.id); break;
     case 'sync': { const res = await sincronizarYRefrescar(true); if (!res) toast('Ya se está enviando.'); break; }
     case 'reintentar': { const o = await store.get(el.dataset.tabla, el.dataset.id); if (o) { await store.put(el.dataset.tabla, { ...o, _sync: 'pendiente', _error: null }); await refrescar(); render(); sincronizarYRefrescar(true); } break; }
@@ -990,13 +1021,14 @@ $app.addEventListener('click', async (ev) => {
     }
     case 'reingresar': S.loginEmail = (api.getSession() || { user: {} }).user.email || ''; user = null; render(); break;
     case 'salir': await salir(); break;
-    case 'panel-abrir': { const r = S.ranchos.find((x) => x.id === el.dataset.id); if (r) { S.rancho = r; await store.setMeta('ranchoActivo', r.id); await refrescar(); ir('atender'); } break; }
+    case 'panel-abrir': { const r = S.ranchos.find((x) => x.id === el.dataset.id); if (r) { S.rancho = r; S.tabAtender = 'ver'; await store.setMeta('ranchoActivo', r.id); await refrescar(); ir('atender'); } break; }
     case 'abrir-insumos': await abrirInsumos(); break;
     case 'sol-enviar': await enviarSolicitud(); break;
     case 'sol-cancelar': await cancelarSolicitud(el.dataset.id); break;
     case 'abrir-asoc': await abrirAsoc(); break;
     case 'asoc-consolidar': await consolidar(); break;
     case 'orden-estado': await cambiarEstadoOrden(el.dataset.id, el.dataset.estado); break;
+    case 'tab-atender': S.tabAtender = el.dataset.tab; render(); break;
     case 'orden-vacas': S.ordenVacas = el.dataset.orden; pintarResultados(); break;
     case 'ins-elegir': S.ped.form.insumo_id = el.dataset.id; S.ped.formError = null; render(); break;
     case 'sug-usar': S.ped.form.insumo_id = el.dataset.id; document.getElementById('cantidad').value = el.dataset.cant; document.getElementById('nota').value = ''; S.ped.formError = null; render(); document.getElementById('cantidad').scrollIntoView({ block: 'center' }); break;

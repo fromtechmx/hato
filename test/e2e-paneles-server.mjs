@@ -40,6 +40,12 @@ for (let i = 0; i < 6; i++) vaca(rVisita, 0, [['inseminacion', 40]]);
 vaca(rLlamar, 0, [['parto', 70], ['celo', 3]]);
 for (let i = 0; i < 3; i++) vaca(rLlamar, 0, gest);
 for (let i = 0; i < 3; i++) vaca(rViejo, 20, gest);
+// vacas "sin datos" del rancho Sin Datos (para revisar qué pasó con ellas)
+const aretar = (ar) => { mock.animales[mock.animales.length - 1].arete = ar; };
+vaca(rViejo, 20, []); aretar('801');                                                                   // sin ningún registro
+vaca(rViejo, 20, [['nota', 30, { texto: 'se vio coja' }]]); aretar('802');                              // solo una nota
+vaca(rViejo, 20, [['parto', 400], ['diagnostico', 300, { resultado: 'vacia' }]]); aretar('803');       // sin movimiento 300 días
+vaca(rViejo, 20, [['inseminacion', 350], ['diagnostico', 320, { resultado: 'prenada' }]]); aretar('804'); // parto esperado hace 67 días
 for (let i = 0; i < 3; i++) vaca(rCalma, 0, gest);
 
 const pajillas = mock.crearInsumo(COOP, 'Pajillas de semen', 'pajilla', { base: 'servicio', factor: 1.5 });

@@ -115,3 +115,12 @@ Se ajustan en `UMBRALES` y `PARAMS` de `lib.js`.
 - Pendiente: "Mis vacas" y "Por atender" siguen siendo lista con detalle, no cuadros.
 
 - **Acumulado del ciclo**: en "Pedir insumos" una tarjeta suma, por insumo, lo pedido desde el último corte (pendiente o ya consolidado; las canceladas no cuentan). Al pasar el corte, el acumulado empieza de nuevo. La sugerencia descuenta este acumulado (no solo lo pendiente), para que no vuelva a pedir lo que la cooperativa ya consolidó.
+
+## Por atender priorizado y "Sin datos" (veterinario y ranchero)
+
+- "Ver vacas por atender" (panel del veterinario) y "Por atender" (inicio) abren una vista con dos pestañas:
+  - **Por ver (N)**: las vacas con alerta, en cuadros agrupados por motivo y en este orden: toca diagnóstico (más días sin diagnosticar primero), parto próximo (fecha más cercana primero), en celo, vacías (más días primero), listas para servicio. N coincide con las vacas en alerta del panel.
+  - **Sin datos (M)**: vacas a averiguar, en este orden: parto vencido (gestante sin parto registrado más de 21 días después de lo esperado), sin movimiento (último registro hace más de 120 días y no gestante), solo notas/tratamientos sin parto/servicio/diagnóstico, sin ningún registro. Cada una dice el motivo. Una vaca puede aparecer en ambas pestañas (borde punteado en "Por ver").
+- La tarjeta del rancho en el panel muestra "N vaca(s) sin datos o con datos que no cuadran" si las hay.
+- Los umbrales (120 y 21 días) son PROVISIONALES: validarlos con un MVZ. "Sin datos" no distingue entre una vaca olvidada y una vaca que ya no está; por eso la acción sugerida es averiguar y registrar (descarte si ya no está).
+- El botón de regreso de la ficha vuelve a la lista de donde se abrió.

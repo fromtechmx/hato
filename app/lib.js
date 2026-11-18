@@ -180,7 +180,7 @@ export function textoError(e) {
 
 // ---------- Panel del veterinario ----------
 // Umbrales PROVISIONALES: pendientes de validar con un MVZ.
-export const UMBRALES = { visitaMin: 5, diasSinDatos: 14 };
+export const UMBRALES = { visitaMin: 5, diasSinDatos: 14, diasSinMovimiento: 120, diasPartoVencido: 21 }; // provisionales: validar con un MVZ
 
 /** Último dato que el servidor recibió de un rancho (ISO) o null. Ignora lo que aún está solo en el teléfono. */
 export function ultimoDatoTs(animales, eventos) {
@@ -199,12 +199,13 @@ export function resumenRancho(animales, eventos, hoy, ahoraMs = Date.now(), P = 
     if (!porVaca.has(e.animal_id)) porVaca.set(e.animal_id, []);
     porVaca.get(e.animal_id).push(e);
   }
-  const r = { vacas: animales.length, diagnosticar: 0, partoProximo: 0, celo: 0, abiertas: 0, listas: 0, alertas: 0, proxima: null, ultimoDato: ultimoDatoTs(animales, eventos), diasSinDatos: null };
+  const r = { vacas: animales.length, sinDatosVacas: 0, diagnosticar: 0, partoProximo: 0, celo: 0, abiertas: 0, listas: 0, alertas: 0, proxima: null, ultimoDato: ultimoDatoTs(animales, eventos), diasSinDatos: null };
   let proxima = null;
   const candidata = (fecha, texto) => { if (!proxima || fecha < proxima.fecha) proxima = { fecha, texto }; };
   for (const a of animales) {
     const est = estadoVaca(porVaca.get(a.id) || [], hoy, P);
     if (est.alerta) r.alertas++;
+    if (motivoSinDatos(est, porVaca.get(a.id) || [], hoy)) r.sinDatosVacas++;
     switch (est.codigo) {
       case 'diagnosticar': r.diagnosticar++; break;
       case 'parto_proximo': r.partoProximo++; break;
@@ -390,4 +391,66 @@ export function acumuladoCiclo(solicitudes, ahora, dia, hora) {
     out.set(s.insumo_id, (out.get(s.insumo_id) || 0) + s.cantidad);
   }
   return out;
+}
+
+// ---------- Vacas que "no tienen datos" y priorización por atender ----------
+
+/** ¿Hay que averiguar qué pasó con esta vaca? Devuelve null o { tipo, texto, dias, orden } (orden: más bajo = más urgente de averiguar).
+ *  Casos (umbrales provisionales en UMBRALES):
+ *  - parto esperado vencido: gestante sin registro de parto, `diasPartoVencido` días después de la fecha esperada;
+ *  - sin movimiento: último registro de hace más de `diasSinMovimiento` días y no está gestante ni descartada;
+ *  - sin estado: solo notas/tratamientos, sin parto, servicio ni diagnóstico;
+ *  - sin registros: ningún registro. */
+export function motivoSinDatos(est, eventos, hoy, U = UMBRALES) {
+  if (est.codigo === 'descartada') return null;
+  const evs = eventosVigentes(eventos);
+  if (est.codigo === 'sin_datos') return { tipo: 'sin_registros', texto: 'Sin ningún registro', dias: null, orden: 4 };
+  if (est.codigo === 'sin_estado') return { tipo: 'sin_estado', texto: 'Solo tiene notas o tratamientos; falta un parto, servicio o diagnóstico', dias: null, orden: 3 };
+  if ((est.codigo === 'parto_proximo' || est.codigo === 'gestante') && est.partoEsperado) {
+    const vencido = diasEntre(est.partoEsperado, hoy);
+    if (vencido > U.diasPartoVencido) return { tipo: 'parto_vencido', texto: `Parto esperado el ${fechaCorta(est.partoEsperado)} (hace ${vencido} días) y sin registro de parto`, dias: vencido, orden: 1 };
+  }
+  if (est.codigo !== 'gestante' && est.codigo !== 'parto_proximo' && evs.length) {
+    const ultima = evs.reduce((m, e) => (e.fecha > m ? e.fecha : m), evs[0].fecha);
+    const dias = diasEntre(ultima, hoy);
+    if (dias > U.diasSinMovimiento) return { tipo: 'sin_movimiento', texto: `Último registro hace ${dias} días (${fechaCorta(ultima)}); estado actual: ${est.texto.toLowerCase()}`, dias, orden: 2 };
+  }
+  return null;
+}
+
+const GRUPOS_POR_VER = [
+  { codigo: 'diagnosticar', titulo: 'Toca diagnóstico', nota: 'las más atrasadas primero' },
+  { codigo: 'parto_proximo', titulo: 'Parto próximo', nota: 'la fecha más cercana primero' },
+  { codigo: 'celo', titulo: 'En celo: inseminar', nota: '' },
+  { codigo: 'abierta', titulo: 'Vacías (abiertas)', nota: 'las que más días llevan primero' },
+  { codigo: 'lista', titulo: 'Listas para servicio', nota: 'las que más días llevan primero' },
+];
+
+/** Separa el hato en: `grupos` (vacas por ver, ordenadas por prioridad y dentro de cada grupo por urgencia) y `sinDatos` (vacas a averiguar).
+ *  Una vaca puede aparecer en ambos (p. ej. "parto próximo" con parto vencido): `dudosa` marca esas en `grupos`. */
+export function clasificarHato(animales, eventos, hoy, P = PARAMS, U = UMBRALES) {
+  const porVaca = new Map();
+  for (const e of eventos) {
+    if (!porVaca.has(e.animal_id)) porVaca.set(e.animal_id, []);
+    porVaca.get(e.animal_id).push(e);
+  }
+  const num = (x, y) => x.a.arete.localeCompare(y.a.arete, 'es', { numeric: true });
+  const filas = animales.map((a) => {
+    const evs = porVaca.get(a.id) || [];
+    const est = estadoVaca(evs, hoy, P);
+    return { a, est, motivo: motivoSinDatos(est, evs, hoy, U) };
+  });
+  const urgencia = {
+    diagnosticar: (x, y) => (y.est.dias ?? 0) - (x.est.dias ?? 0) || num(x, y),
+    parto_proximo: (x, y) => String(x.est.partoEsperado).localeCompare(String(y.est.partoEsperado)) || num(x, y),
+    abierta: (x, y) => (y.est.dias ?? 0) - (x.est.dias ?? 0) || num(x, y),
+    lista: (x, y) => (y.est.dias ?? 0) - (x.est.dias ?? 0) || num(x, y),
+    celo: num,
+  };
+  const grupos = GRUPOS_POR_VER.map((g) => ({
+    ...g,
+    vacas: filas.filter((f) => f.est.codigo === g.codigo).sort(urgencia[g.codigo]).map((f) => ({ ...f, dudosa: !!f.motivo })),
+  })).filter((g) => g.vacas.length);
+  const sinDatos = filas.filter((f) => f.motivo).sort((x, y) => x.motivo.orden - y.motivo.orden || (y.motivo.dias ?? 0) - (x.motivo.dias ?? 0) || num(x, y));
+  return { grupos, totalPorVer: grupos.reduce((n, g) => n + g.vacas.length, 0), sinDatos };
 }
