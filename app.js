@@ -15,6 +15,7 @@ let user = null;
 
 const S = {
   vista: 'inicio',
+  comprasVet: [],
   ranchos: [],
   rancho: null,
   animales: [],
@@ -65,6 +66,17 @@ async function refrescar() {
   S.ultima = (await store.getMeta('ultimaSync')) || null;
 }
 
+// Compras de la cooperativa dirigidas a este usuario como veterinario (por correo). Se guarda en el teléfono para verlas sin internet.
+async function cargarComprasVet() {
+  try {
+    const filas = await api.rest('POST', '/rpc/mis_compras_vet', {});
+    S.comprasVet = Array.isArray(filas) ? filas : [];
+    if (store) await store.setMeta('comprasVet', S.comprasVet);
+  } catch (e) {
+    // sin conexión u otro error: se conserva lo último que se supo
+  }
+}
+
 async function sincronizarYRefrescar(manual = false) {
   if (!sync || S.sincronizando) return null;
   S.sincronizando = true;
@@ -75,6 +87,7 @@ async function sincronizarYRefrescar(manual = false) {
     // Si cambió la lista de ranchos, se actualiza.
     S.ranchos = (await store.getMeta('ranchos')) || [];
     S.admin = (await store.getMeta('admin')) || [];
+    await cargarComprasVet();
     if (S.rancho && !S.ranchos.find((r) => r.id === S.rancho.id)) S.rancho = S.ranchos[0] || null;
     if (!S.rancho && S.ranchos.length) S.rancho = S.ranchos[0];
   } finally {
@@ -174,13 +187,39 @@ function vistaLogin() {
   </main>`;
 }
 
+function vistaComprasVet() {
+  const lista = S.comprasVet.map((o) => {
+    const [cls, txt] = ESTADOS_ORDEN[o.estado] || ['gris', o.estado];
+    const f = fechaEntregaVet(o.creada_en);
+    const porRancho = new Map();
+    for (const l of o.por_rancho || []) { if (!porRancho.has(l.rancho)) porRancho.set(l.rancho, []); porRancho.get(l.rancho).push(l); }
+    return `<div class="card"><div class="fila"><b>${esc(o.codigo)}</b><span class="estado ${cls}">${esc(txt)}</span></div>
+      <span class="suave">${esc(o.cooperativa)} · pedida el ${esc(fechaCorta(String(o.creada_en).slice(0, 10)))}</span>
+      ${f ? `<div style="margin-top:6px"><b>Entrega estimada: ${esc(fechaCorta(f))}</b> <span class="suave">(${DIAS_ENTREGA_VET} días después de la orden)</span></div>` : ''}
+      ${o.procede_de ? `<div class="aviso info" style="margin-top:8px">Procede de <b>${esc(o.procede_de)}</b>: es lo que faltó por llegar.</div>` : ''}
+      <div style="margin-top:8px"><b>Total a surtir</b></div>
+      ${(o.lineas || []).map((l) => `<div class="fila"><span>${esc(l.insumo)}</span><b>${esc(l.total)} ${esc(l.unidad)}</b></div>`).join('')}
+      <div style="margin-top:8px"><b>Por rancho</b></div>
+      ${[...porRancho.entries()].map(([r, ls]) => `<div class="ev"><b>${esc(r)}</b><br><span class="suave">${ls.map((l) => `${esc(l.insumo)}: ${esc(l.cantidad)} ${esc(l.unidad)}`).join(' · ')}</span></div>`).join('')}
+      ${o.nota ? `<p class="suave" style="margin:8px 0 0">Nota: ${esc(o.nota)}</p>` : ''}</div>`;
+  }).join('');
+  return marco(`
+    <button class="atras" data-accion="ir" data-vista="inicio">‹ Inicio</button>
+    <h2>Compras para mí</h2>
+    <p class="suave">Compras de tu cooperativa dirigidas a ti. Aquí solo ves lo que hay que surtir y para qué rancho; no ves vacas ni registros. Se actualiza al sincronizar.</p>
+    ${lista || '<p class="suave">No hay compras para ti por ahora.</p>'}
+    ${pie()}`);
+}
+
 function vistaInicio() {
   const hayPanel = S.panel.length > 0;
   const hayAsoc = S.admin.length > 0;
-  if (!S.rancho && !hayPanel && !hayAsoc) {
+  const hayCompras = S.comprasVet.length > 0;
+  if (!S.rancho && !hayPanel && !hayAsoc && !hayCompras) {
     return marco(`<div class="card"><h2>Aún no tienes un rancho asignado</h2><p>Pide a tu cooperativa o a quien administra HATO que vincule tu cuenta (<b>${esc(user ? user.email : '')}</b>) a un rancho. Luego toca el botón de arriba para actualizar.</p><button class="btn primario" data-accion="sync">Actualizar ahora</button></div>${pie()}`);
   }
   const extra = `${hayPanel ? `<button class="btn" style="margin-top:12px" data-accion="ir" data-vista="panel">🩺 Panel del veterinario${S.panel.some((p) => p.rec.prioridad === 1) ? ' · hay visitas urgentes' : ''}</button>` : ''}
+    ${hayCompras ? `<button class="btn" data-accion="ir" data-vista="comprasvet">🛒 Compras para mí · ${S.comprasVet.length}</button>` : ''}
     ${hayAsoc ? `<button class="btn" data-accion="abrir-asoc">🤝 Panel de la asociación</button>` : ''}`;
   if (!S.rancho) return marco(`${extra}${pie()}`);
   const porAtender = [...S.estados.values()].filter((e) => e.alerta).length;
@@ -397,6 +436,7 @@ function render() {
     case 'panel': html = vistaPanel(); break;
     case 'insumos': html = S.rancho ? vistaInsumos() : vistaInicio(); break;
     case 'asoc': html = vistaAsoc(); break;
+    case 'comprasvet': html = vistaComprasVet(); break;
     default: html = vistaInicio();
   }
   $app.innerHTML = html;
@@ -801,7 +841,7 @@ async function cargarAsoc() {
       api.rest('GET', '/solicitudes_insumo?select=id,rancho_id,insumo_id,cantidad,cantidad_asignada,estado,orden_id,origen_solicitud_id,creado_en&order=creado_en.desc&limit=1000'),
       api.rest('GET', '/insumos?select=id,nombre,unidad,activo&order=nombre.asc'),
       api.rest('GET', '/ranchos?select=id,nombre'),
-      api.rest('GET', '/ordenes_consolidadas?select=id,codigo,destinatario_tipo,destinatario,nota,estado,creada_en,origen_orden_id,pendiente,pendiente_orden_id&order=creada_en.desc&limit=30'),
+      api.rest('GET', '/ordenes_consolidadas?select=id,codigo,destinatario_tipo,destinatario,nota,estado,creada_en,origen_orden_id,pendiente,pendiente_orden_id,veterinario_correo&order=creada_en.desc&limit=30'),
       api.rest('GET', '/entregas?select=id,orden_id,rancho_id,codigo,estado&order=codigo.asc&limit=500'),
       api.rest('GET', '/orden_recepciones?select=orden_id,insumo_id,cantidad_solicitada,cantidad_recibida&limit=500'),
       api.rest('GET', `/cooperativas?id=eq.${encodeURIComponent(S.asoc.coop.id)}&select=id,corte_dia,corte_hora`),
@@ -886,6 +926,13 @@ function tarjetaOrden(o) {
       <button class="btn" data-accion="recep-cancelar">Cancelar</button></div>`;
   }
   const codigoDe = (id) => { const x = A.ordenes.find((q) => q.id === id); return x ? x.codigo : 'otra compra'; };
+  const vetCtl = o.destinatario_tipo !== 'veterinario' || o.estado === 'cancelada' ? '' : (o.veterinario_correo
+    ? `<div class="aviso info" style="margin-top:8px">El doctor la ve en su app con la cuenta <b>${esc(o.veterinario_correo)}</b>${o.estado === 'borrador' ? ' cuando la marques como enviada' : ''}.
+        <div><button class="btn chico" style="margin:8px 0 0" data-accion="vet-quitar" data-id="${esc(o.id)}">Quitar acceso</button></div></div>`
+    : `<div class="card" style="margin-top:8px"><b>¿El doctor usa HATO?</b>
+        <p class="suave" style="margin:4px 0 6px">Escribe el correo con el que entra a la app y le aparecerá esta compra${o.estado === 'borrador' ? ' en cuanto la marques como enviada' : ''}.</p>
+        <input id="vetc-${esc(o.id)}" type="email" inputmode="email" autocomplete="off" placeholder="correo@del-doctor.com" aria-label="Correo del doctor">
+        <button class="btn chico" style="margin:8px 0 0" data-accion="vet-asignar" data-id="${esc(o.id)}">Mostrar al doctor</button></div>`);
   const origen = o.origen_orden_id ? `<div class="aviso info" style="margin-top:8px">Procede de <b>${esc(codigoDe(o.origen_orden_id))}</b>: es lo que faltó por llegar de esa compra.</div>` : '';
   let pendiente = '';
   if (o.estado === 'recibida') {
@@ -927,7 +974,7 @@ function tarjetaOrden(o) {
     ${lineaEntregaVet(o) ? `<div style="margin-top:4px"><b>${esc(lineaEntregaVet(o))}</b></div>` : ''}
     <div>${items.map((i) => `${esc(i.nombre)}: ${esc(i.total)} ${esc(i.unidad)}`).join('<br>')}</div>
     <div style="margin-top:6px"><button class="btn chico" data-accion="orden-copiar" data-id="${esc(o.id)}">Copiar texto</button>${accion}</div>
-    ${origen}${recepcion}${reparto}${pendiente}</div>`;
+    ${vetCtl}${origen}${recepcion}${reparto}${pendiente}</div>`;
 }
 
 function tarjetaCorte() {
@@ -1070,6 +1117,17 @@ async function confirmarRecepcion(ordenId) {
   } catch (e) { R.error = msgError(e); render(); }
 }
 
+async function asignarVet(id, quitar) {
+  const campo = document.getElementById(`vetc-${id}`);
+  const correo = quitar ? '' : (campo ? campo.value.trim() : '');
+  if (!quitar && !/^\S+@\S+\.\S+$/.test(correo)) { toast('Escribe un correo válido.'); return; }
+  try {
+    await api.rest('POST', '/rpc/asignar_veterinario_orden', { p_orden: id, p_correo: correo });
+    toast(quitar ? 'Acceso quitado' : 'Listo: el doctor la verá en su app');
+  } catch (e) { toast(msgError(e)); }
+  await cargarAsoc();
+}
+
 async function generarPendiente(id) {
   const o = S.asoc.ordenes.find((x) => x.id === id);
   if (!window.confirm(`Se creará una compra nueva con lo que faltó de ${o ? o.codigo : 'esta compra'}, con su propio código y entregas por rancho. No se puede deshacer desde aquí. ¿Continuar?`)) return;
@@ -1165,6 +1223,8 @@ $app.addEventListener('click', async (ev) => {
     case 'orden-recibir': abrirRecepcion(el.dataset.id); break;
     case 'recep-confirmar': await confirmarRecepcion(el.dataset.id); break;
     case 'recep-cancelar': S.asoc.recep = null; render(); break;
+    case 'vet-asignar': await asignarVet(el.dataset.id, false); break;
+    case 'vet-quitar': await asignarVet(el.dataset.id, true); break;
     case 'pend-generar': await generarPendiente(el.dataset.id); break;
     case 'pend-cerrar': await cerrarPendiente(el.dataset.id); break;
     case 'entrega-marcar': await marcarEntrega(el.dataset.id); break;
@@ -1234,7 +1294,7 @@ async function salir() {
   await api.logout();
   if (store) store.close();
   store = null; sync = null; user = null;
-  S.rancho = null; S.ranchos = []; S.admin = []; S.panel = []; S.ped = null; S.asoc = null; S.animales = []; S.eventos = []; S.reg = null; S.vista = 'inicio';
+  S.rancho = null; S.ranchos = []; S.admin = []; S.panel = []; S.comprasVet = []; S.ped = null; S.asoc = null; S.animales = []; S.eventos = []; S.reg = null; S.vista = 'inicio';
   render();
 }
 
@@ -1246,6 +1306,7 @@ async function abrirUsuario(primeraVez = false) {
   sync = createSync({ store, api });
   S.ranchos = (await store.getMeta('ranchos')) || [];
   S.admin = (await store.getMeta('admin')) || [];
+  S.comprasVet = (await store.getMeta('comprasVet')) || [];
   const activo = await store.getMeta('ranchoActivo');
   S.rancho = S.ranchos.find((r) => r.id === activo) || S.ranchos[0] || null;
   S.vista = 'inicio';

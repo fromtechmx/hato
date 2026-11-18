@@ -12,6 +12,7 @@ const vet = mock.crearUsuario('vet@test.invalid', 'clave-de-prueba');
 const ganadero = mock.crearUsuario('ganadero@test.invalid', 'clave-de-prueba');
 const vaquero = mock.crearUsuario('vaquero@test.invalid', 'clave-de-prueba');
 const admin = mock.crearUsuario('admin@test.invalid', 'clave-de-prueba');
+mock.crearUsuario('doctor@test.invalid', 'clave-de-prueba'); // veterinario de clínica: sin ranchos ni cargo de asociación
 
 const rVisita = mock.crearRancho({ cooperativa: COOP, socio: 'S1', rancho: 'Rancho La Visita' });
 const rLlamar = mock.crearRancho({ cooperativa: COOP, socio: 'S2', rancho: 'Rancho El Llamar' });
@@ -76,6 +77,6 @@ http.createServer((req, res) => {
   res.writeHead(200, { ...CORS, 'content-type': 'application/json' });
   const nomI = (id) => mock.insumos.find((i) => i.id === id).nombre;
   const nomR = (id) => mock.ranchos.find((r) => r.id === id).nombre;
-  res.end(JSON.stringify({ cooperativa: { dia: mock.cooperativas[0].corte_dia, hora: mock.cooperativas[0].corte_hora }, estimaciones: mock.estimaciones.map((e) => ({ rancho: nomR(e.rancho_id), insumo: nomI(e.insumo_id), base: e.base, factor: e.factor })), solicitudes: mock.solicitudes.map((s) => ({ rancho: nomR(s.rancho_id), insumo: nomI(s.insumo_id), cantidad: s.cantidad, asignada: s.cantidad_asignada, estado: s.estado, orden: !!s.orden_id, deSolicitud: !!s.origen_solicitud_id })), ordenes: mock.ordenes.map((o) => ({ codigo: o.codigo, destinatario: o.destinatario, tipo: o.destinatario_tipo, estado: o.estado, pendiente: o.pendiente, origen: o.origen_orden_id ? mock.ordenes.find((x) => x.id === o.origen_orden_id).codigo : null })), entregas: mock.entregas.map((e) => ({ codigo: e.codigo, rancho: nomR(e.rancho_id), estado: e.estado })), recepciones: mock.recepciones.map((r) => ({ insumo: nomI(r.insumo_id), solicitado: r.cantidad_solicitada, recibido: r.cantidad_recibida })), insumos: mock.insumos.map((i) => i.nombre) }));
+  res.end(JSON.stringify({ cooperativa: { dia: mock.cooperativas[0].corte_dia, hora: mock.cooperativas[0].corte_hora }, estimaciones: mock.estimaciones.map((e) => ({ rancho: nomR(e.rancho_id), insumo: nomI(e.insumo_id), base: e.base, factor: e.factor })), solicitudes: mock.solicitudes.map((s) => ({ rancho: nomR(s.rancho_id), insumo: nomI(s.insumo_id), cantidad: s.cantidad, asignada: s.cantidad_asignada, estado: s.estado, orden: !!s.orden_id, deSolicitud: !!s.origen_solicitud_id })), ordenes: mock.ordenes.map((o) => ({ codigo: o.codigo, destinatario: o.destinatario, tipo: o.destinatario_tipo, estado: o.estado, vetCorreo: o.veterinario_correo, pendiente: o.pendiente, origen: o.origen_orden_id ? mock.ordenes.find((x) => x.id === o.origen_orden_id).codigo : null })), entregas: mock.entregas.map((e) => ({ codigo: e.codigo, rancho: nomR(e.rancho_id), estado: e.estado })), recepciones: mock.recepciones.map((r) => ({ insumo: nomI(r.insumo_id), solicitado: r.cantidad_solicitada, recibido: r.cantidad_recibida })), insumos: mock.insumos.map((i) => i.nombre) }));
 }).listen(4175, '127.0.0.1');
 console.log('listo');

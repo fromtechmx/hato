@@ -140,3 +140,8 @@ La app vive en la **raíz** del repositorio (GitHub Pages sirve la raíz). No po
 - Si en la recepción llegó menos de lo pedido, la tarjeta de la compra muestra "Falta por llegar" con dos acciones del admin: **Generar compra con lo pendiente** (RPC `generar_orden_pendiente`: crea una compra nueva en borrador, con su código y entregas por rancho, marcada "Procede de CC-…") o **Cerrar sin reponer** (`cerrar_pendiente`).
 - La original queda marcada (repuesta / cerrada) y ya no ofrece generarlo otra vez. El ranchero ve en su entrega "Faltaron N: los recibirás en CC-…-NN" y en la nueva "Procede de una entrega anterior". Lo repuesto no cuenta como pedido nuevo en el acumulado del ciclo.
 - Límite: cancelar una compra consolidada sigue sin definirse.
+
+## Compras para el veterinario de clínica
+- En una compra dirigida a "Veterinario" el admin puede escribir el **correo** con el que el doctor entra a HATO (RPC `asignar_veterinario_orden`; guarda `veterinario_user_id` y `veterinario_correo`). El doctor no necesita ser MVZ de ningún rancho.
+- El doctor ve en su inicio "Compras para mí" (RPC `mis_compras_vet`, solo `enviada`/`recibida`): código, estado, entrega estimada (orden + 3 días), total a surtir, qué rancho lleva qué y de dónde procede. No ve vacas ni registros ni el panel de la asociación. Se guarda en el teléfono para verlo sin internet.
+- Límites: la cuenta del doctor debe existir (haber entrado una vez); el correo asignado no se valida contra la identidad real; el doctor no puede confirmar entrega aún; si cambias el correo de su cuenta, hay que reasignar.

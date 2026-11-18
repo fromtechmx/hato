@@ -130,7 +130,7 @@ export class MockSupabase {
       if (!this._coopsAdmin(uid).has(body.p_cooperativa)) return this._json(403, { code: '42501', message: 'No eres administrador de esta cooperativa' });
       const objetivo = this.solicitudes.filter((s) => s.estado === 'pendiente' && this._coopDeRancho(s.rancho_id) === body.p_cooperativa && (!body.p_insumo_ids || body.p_insumo_ids.includes(s.insumo_id)));
       if (!objetivo.length) return this._json(404, { code: 'P0002', message: 'No hay solicitudes pendientes para consolidar' });
-      const o = { id: crypto.randomUUID(), codigo: `CC-2026-${String(++this.seqOrden).padStart(4, '0')}`, cooperativa_id: body.p_cooperativa, destinatario_tipo: body.p_tipo, destinatario: body.p_destinatario, nota: body.p_nota ?? null, estado: 'borrador', creada_por: uid, creada_en: this.marca(), origen_orden_id: null, pendiente: null, pendiente_orden_id: null };
+      const o = { id: crypto.randomUUID(), codigo: `CC-2026-${String(++this.seqOrden).padStart(4, '0')}`, cooperativa_id: body.p_cooperativa, destinatario_tipo: body.p_tipo, destinatario: body.p_destinatario, nota: body.p_nota ?? null, estado: 'borrador', creada_por: uid, creada_en: this.marca(), origen_orden_id: null, pendiente: null, pendiente_orden_id: null, veterinario_user_id: null, veterinario_correo: null };
       this.ordenes.push(o);
       for (const s of objetivo) { s.estado = 'consolidada'; s.orden_id = o.id; }
       const ranchosOrden = [...new Set(objetivo.map((s) => s.rancho_id))].map((id) => this.ranchos.find((r) => r.id === id)).sort((a, b) => a.nombre.localeCompare(b.nombre));
@@ -142,6 +142,26 @@ export class MockSupabase {
       if (![0, 1, 2, 3, 4, 5, 6].includes(body.p_dia) || !Number.isInteger(body.p_hora) || body.p_hora < 0 || body.p_hora > 23) return this._json(400, { code: 'P0001', message: 'Día u hora de corte inválidos' });
       const c = this.cooperativas.find((x) => x.id === body.p_coop); c.corte_dia = body.p_dia; c.corte_hora = body.p_hora;
       return { status: 204, body: '' };
+    }
+    if (tabla === 'rpc/asignar_veterinario_orden') {
+      const o = this.ordenes.find((x) => x.id === body.p_orden);
+      if (!o || !this._coopsAdmin(uid).has(o.cooperativa_id)) return this._json(403, { code: '42501', message: 'No eres administrador de esta cooperativa' });
+      if (o.destinatario_tipo !== 'veterinario') return this._json(400, { code: 'P0001', message: 'Solo las compras dirigidas a un veterinario se pueden mostrar a un doctor' });
+      const correo = String(body.p_correo || '').trim().toLowerCase();
+      if (!correo) { o.veterinario_user_id = null; o.veterinario_correo = null; return { status: 204, body: '' }; }
+      const u = this.users.find((x) => x.email.toLowerCase() === correo);
+      if (!u) return this._json(400, { code: 'P0001', message: 'No hay una cuenta de HATO con ese correo. Pídele al doctor que entre una vez a la app con ese correo.' });
+      o.veterinario_user_id = u.id; o.veterinario_correo = correo;
+      return { status: 204, body: '' };
+    }
+    if (tabla === 'rpc/mis_compras_vet') {
+      const out = this.ordenes.filter((o) => o.veterinario_user_id === uid && (o.estado === 'enviada' || o.estado === 'recibida')).map((o) => {
+        const sol = this.solicitudes.filter((s) => s.orden_id === o.id && s.estado !== 'cancelada');
+        const tot = new Map();
+        for (const s of sol) { const i = this.insumos.find((x) => x.id === s.insumo_id); const k = i.nombre; tot.set(k, { insumo: i.nombre, unidad: i.unidad, total: (tot.get(k)?.total || 0) + s.cantidad }); }
+        return { id: o.id, codigo: o.codigo, estado: o.estado, creada_en: o.creada_en, nota: o.nota, destinatario: o.destinatario, cooperativa: this.cooperativas.find((c) => c.id === o.cooperativa_id).nombre, procede_de: o.origen_orden_id ? this.ordenes.find((x) => x.id === o.origen_orden_id).codigo : null, lineas: [...tot.values()].sort((a, b) => a.insumo.localeCompare(b.insumo)), por_rancho: sol.map((s) => ({ rancho: this.ranchos.find((r) => r.id === s.rancho_id).nombre, insumo: this.insumos.find((i) => i.id === s.insumo_id).nombre, unidad: this.insumos.find((i) => i.id === s.insumo_id).unidad, cantidad: s.cantidad, asignada: s.cantidad_asignada })) };
+      });
+      return this._json(200, out);
     }
     if (tabla === 'rpc/guardar_estimacion') {
       const ok = this.membresias.some((m) => m.user_id === uid && m.rancho_id === body.p_rancho && m.activo && (m.rol === 'dueno' || m.rol === 'mvz'));
@@ -159,7 +179,7 @@ export class MockSupabase {
       const faltan = this.solicitudes.filter((s) => s.orden_id === o.id && s.cantidad_asignada !== null && s.cantidad_asignada < s.cantidad);
       if (!faltan.length) return this._json(400, { code: 'P0001', message: 'No hay nada pendiente en esta compra' });
       if (tabla === 'rpc/cerrar_pendiente') { o.pendiente = 'cerrada'; return { status: 204, body: '' }; }
-      const n = { id: crypto.randomUUID(), codigo: `CC-2026-${String(++this.seqOrden).padStart(4, '0')}`, cooperativa_id: o.cooperativa_id, destinatario_tipo: o.destinatario_tipo, destinatario: o.destinatario, nota: `Pendiente de ${o.codigo}`, estado: 'borrador', creada_por: uid, creada_en: this.marca(), origen_orden_id: o.id, pendiente: null, pendiente_orden_id: null };
+      const n = { id: crypto.randomUUID(), codigo: `CC-2026-${String(++this.seqOrden).padStart(4, '0')}`, cooperativa_id: o.cooperativa_id, destinatario_tipo: o.destinatario_tipo, destinatario: o.destinatario, nota: `Pendiente de ${o.codigo}`, estado: 'borrador', creada_por: uid, creada_en: this.marca(), origen_orden_id: o.id, pendiente: null, pendiente_orden_id: null, veterinario_user_id: null, veterinario_correo: null };
       this.ordenes.push(n);
       const nuevas = faltan.map((s) => ({ id: crypto.randomUUID(), rancho_id: s.rancho_id, insumo_id: s.insumo_id, cantidad: s.cantidad - s.cantidad_asignada, nota: `Pendiente de ${o.codigo}`, estado: 'consolidada', orden_id: n.id, cantidad_asignada: null, origen_solicitud_id: s.id, creado_por: s.creado_por, creado_en: s.creado_en }));
       this.solicitudes.push(...nuevas);
