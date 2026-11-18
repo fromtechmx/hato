@@ -305,3 +305,76 @@ export function lineasDeEntrega(solicitudes, insumos, ordenId, ranchoId) {
     return { nombre: i.nombre, unidad: i.unidad, pedida: l.pedida, asignada: l.conAsignacion ? l.asignada : null };
   }).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
 }
+
+// ---------- Corte semanal y necesidad estimada ----------
+
+export const DIAS_SEMANA = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+export const HORIZONTE_DIAS = 7;
+
+/** Corte anterior y siguiente respecto a `ahora` (hora local del dispositivo). dia: 0=domingo … 6=sábado.
+ * Justo en el instante del corte, ese corte ya pasó y el siguiente es el de la semana próxima. */
+export function cortesAlrededor(ahora, dia, hora) {
+  const c = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate(), hora, 0, 0, 0);
+  c.setDate(c.getDate() + (dia - c.getDay()));
+  if (c.getTime() > ahora.getTime()) c.setDate(c.getDate() - 7);
+  const ultimo = new Date(c.getTime());
+  const proximo = new Date(ultimo.getFullYear(), ultimo.getMonth(), ultimo.getDate() + 7, hora, 0, 0, 0);
+  return { ultimo, proximo };
+}
+
+/** "faltan 2 días 4 h" / "faltan 5 h" / "falta menos de 1 h" */
+export function textoFalta(ahora, proximo) {
+  const min = Math.max(0, Math.floor((proximo.getTime() - ahora.getTime()) / 60000));
+  const d = Math.floor(min / 1440), h = Math.floor((min % 1440) / 60);
+  if (d > 0) return `faltan ${d} ${d === 1 ? 'día' : 'días'}${h ? ` ${h} h` : ''}`;
+  if (h > 0) return `faltan ${h} h`;
+  return 'falta menos de 1 h';
+}
+
+export function textoCorte(dia, hora) {
+  return `${DIAS_SEMANA[dia]} ${String(hora).padStart(2, '0')}:00`;
+}
+
+/** Para el admin: de las solicitudes pendientes, cuántas llegaron antes del último corte (rezagadas) y cuántas después. */
+export function resumenCorte(solicitudes, ahora, dia, hora) {
+  const { ultimo, proximo } = cortesAlrededor(ahora, dia, hora);
+  let rezagadas = 0, nuevas = 0;
+  for (const s of solicitudes) {
+    if (s.estado !== 'pendiente') continue;
+    if (new Date(s.creado_en).getTime() < ultimo.getTime()) rezagadas++; else nuevas++;
+  }
+  return { ultimo, proximo, rezagadas, nuevas };
+}
+
+/** Necesidad estimada de insumos para los próximos HORIZONTE_DIAS, según el estado del hato.
+ * 'servicio': vacas en celo, abiertas, listas, o posparto que estarán listas dentro del horizonte (cota superior: no todas se servirán).
+ * 'diagnostico': vacas que ya tocan diagnóstico o que lo cumplirán dentro del horizonte.
+ * Resultado = ceil(vacas × factor). `pendientes`: Map insumo_id → cantidad ya solicitada y aún pendiente. */
+export function necesidadSemana(animales, eventos, hoy, insumos, pendientes = new Map(), P = PARAMS) {
+  const porVaca = new Map();
+  for (const e of eventos) {
+    if (!porVaca.has(e.animal_id)) porVaca.set(e.animal_id, []);
+    porVaca.get(e.animal_id).push(e);
+  }
+  let servicio = 0, diagnostico = 0;
+  for (const a of animales) {
+    const est = estadoVaca(porVaca.get(a.id) || [], hoy, P);
+    switch (est.codigo) {
+      case 'celo': case 'abierta': case 'lista': servicio++; break;
+      case 'posparto': if (P.esperaServicio - est.dias <= HORIZONTE_DIAS) servicio++; break;
+      case 'diagnosticar': diagnostico++; break;
+      case 'servida': if (P.diasDiagnostico - est.dias <= HORIZONTE_DIAS) diagnostico++; break;
+      default: break;
+    }
+  }
+  const out = [];
+  for (const i of insumos) {
+    if (!i.estimar_base || i.estimar_base === 'ninguna' || !(Number(i.estimar_factor) > 0)) continue;
+    const vacas = i.estimar_base === 'servicio' ? servicio : diagnostico;
+    const sugerida = Math.ceil(vacas * Number(i.estimar_factor));
+    if (sugerida <= 0) continue;
+    const ya = pendientes.get(i.id) || 0;
+    out.push({ insumo_id: i.id, nombre: i.nombre, unidad: i.unidad, base: i.estimar_base, vacas, factor: Number(i.estimar_factor), sugerida, ya, faltante: Math.max(0, sugerida - ya) });
+  }
+  return out.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+}

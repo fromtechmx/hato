@@ -1,6 +1,6 @@
 // HATO · app. Pantallas y flujo. Todo se guarda primero en el teléfono; se envía cuando hay conexión.
 
-import { PARAMS, TIPOS, textoTipo, uuid, hoyLocal, sumarDias, fechaCorta, normArete, validarEvento, eventosVigentes, estadoVaca, tipoSugerido, ordenarTipos, UMBRALES, resumenRancho, recomendarVisita, agruparSolicitudes, validarSolicitud, repartir, lineasDeEntrega } from './lib.js';
+import { PARAMS, TIPOS, textoTipo, uuid, hoyLocal, sumarDias, fechaCorta, normArete, validarEvento, eventosVigentes, estadoVaca, tipoSugerido, ordenarTipos, UMBRALES, resumenRancho, recomendarVisita, agruparSolicitudes, validarSolicitud, repartir, lineasDeEntrega, cortesAlrededor, textoFalta, textoCorte, resumenCorte, necesidadSemana, DIAS_SEMANA } from './lib.js';
 import { openIdbStore } from './store.js';
 import { createApi } from './api.js';
 import { createSync } from './sync.js';
@@ -518,7 +518,7 @@ function msgError(e) {
 }
 
 async function abrirInsumos() {
-  S.ped = { cargando: true, error: null, formError: null, insumos: [], solicitudes: [], entregas: [], form: { insumo_id: '', cantidad: '', nota: '' } };
+  S.ped = { cargando: true, error: null, formError: null, corte: null, insumos: [], solicitudes: [], entregas: [], form: { insumo_id: '', cantidad: '', nota: '' } };
   ir('insumos');
   await cargarInsumos();
 }
@@ -526,11 +526,13 @@ async function abrirInsumos() {
 async function cargarInsumos() {
   try {
     const rid = encodeURIComponent(S.rancho.id);
-    const [ins, sol, ent] = await Promise.all([
-      api.rest('GET', '/insumos?select=id,nombre,unidad&activo=eq.true&order=nombre.asc'),
+    const [ins, sol, ent, coop] = await Promise.all([
+      api.rest('GET', '/insumos?select=id,nombre,unidad,estimar_base,estimar_factor&activo=eq.true&order=nombre.asc'),
       api.rest('GET', `/solicitudes_insumo?rancho_id=eq.${rid}&select=id,cantidad,cantidad_asignada,estado,nota,creado_en,orden_id,insumo_id,insumo:insumos(nombre,unidad)&order=creado_en.desc&limit=100`),
       api.rest('GET', `/entregas?rancho_id=eq.${rid}&select=id,orden_id,codigo,estado&order=codigo.desc&limit=50`),
+      api.rest('GET', '/cooperativas?select=id,nombre,corte_dia,corte_hora&order=nombre.asc&limit=1'),
     ]);
+    S.ped.corte = coop && coop[0] ? { dia: coop[0].corte_dia, hora: coop[0].corte_hora } : null;
     S.ped.insumos = ins || [];
     S.ped.solicitudes = sol || [];
     S.ped.entregas = ent || [];
@@ -569,6 +571,29 @@ async function confirmarEntrega(id) {
   await cargarInsumos();
 }
 
+function bloqueCorte(corte) {
+  if (!corte) return '';
+  const ahora = new Date();
+  const { proximo } = cortesAlrededor(ahora, corte.dia, corte.hora);
+  return `<div class="aviso warn"><b>Corte semanal: ${esc(textoCorte(corte.dia, corte.hora))}</b> · ${esc(textoFalta(ahora, proximo))}.<br><span class="suave">Lo que pidas antes entra a la compra de esta semana. Lo que pidas después, a la siguiente.</span></div>`;
+}
+
+function sugerenciaRancho() {
+  const P = S.ped;
+  if (!P || !S.animales) return '';
+  const pendientes = new Map();
+  for (const x of P.solicitudes) if (x.estado === 'pendiente') pendientes.set(x.insumo_id, (pendientes.get(x.insumo_id) || 0) + x.cantidad);
+  const sug = necesidadSemana(S.animales, S.eventos, hoyLocal(), P.insumos, pendientes);
+  if (!sug.length) return '';
+  const ult = resumenRancho(S.animales, S.eventos, hoyLocal());
+  const sinDatos = ult.diasSinDatos !== null && ult.diasSinDatos > UMBRALES.diasSinDatos;
+  return `<div class="card"><b>Lo que podrías necesitar esta semana</b>
+    <p class="suave" style="margin:4px 0 8px">Estimación según tus vacas y los factores de tu cooperativa. Es una guía: tú decides cuánto pedir.${sinDatos ? ` <b>Ojo: tu último registro tiene ${esc(ult.diasSinDatos)} días; la estimación puede estar baja.</b>` : ''}</p>
+    ${sug.map((x) => `<div class="ev"><div class="fila"><b>${esc(x.nombre)}: ${esc(x.sugerida)} ${esc(x.unidad)}</b></div>
+      <span class="suave">${esc(x.vacas)} ${x.base === 'servicio' ? 'vacas por servir' : 'vacas por diagnosticar'} × ${esc(x.factor)}${x.ya ? ` · ya pediste ${esc(x.ya)}` : ''}</span>
+      ${x.faltante > 0 ? `<div><button class="btn chico" style="margin-top:6px" data-accion="sug-usar" data-id="${esc(x.insumo_id)}" data-cant="${esc(x.faltante)}">Pedir ${esc(x.faltante)}</button></div>` : '<div class="suave" style="margin-top:4px">Ya cubierto con lo que pediste.</div>'}</div>`).join('')}</div>`;
+}
+
 function vistaInsumos() {
   const P = S.ped || { cargando: true, insumos: [], solicitudes: [], form: {} };
   const f = P.form || {};
@@ -586,6 +611,8 @@ function vistaInsumos() {
     <p class="suave">Tu cooperativa junta los pedidos de todos los ranchos para comprar en conjunto. Necesita internet.</p>
     ${P.error ? `<div class="aviso mal">${esc(P.error)}</div>` : ''}
     ${P.cargando ? '<p class="suave">Cargando…</p>' : `
+    ${bloqueCorte(P.corte)}
+    ${sugerenciaRancho()}
     <div class="card">
       <label for="insumo">Insumo</label>
       <select id="insumo" class="campo"><option value="">Elige…</option>${opciones}</select>
@@ -629,21 +656,23 @@ async function cancelarSolicitud(id) {
 // ---------- Panel de la asociación ----------
 
 async function abrirAsoc() {
-  S.asoc = { cargando: true, error: null, coop: S.admin[0], solicitudes: [], insumos: [], ranchos: [], ordenes: [], entregas: [], recepciones: [], recep: null, form: { tipo: 'veterinario', destinatario: '', nota: '' }, formError: null, sel: null, insForm: { nombre: '', unidad: '' }, insError: null };
+  S.asoc = { cargando: true, error: null, corte: null, corteError: null, coop: S.admin[0], solicitudes: [], insumos: [], ranchos: [], ordenes: [], entregas: [], recepciones: [], recep: null, form: { tipo: 'veterinario', destinatario: '', nota: '' }, formError: null, sel: null, insForm: { nombre: '', unidad: '' }, insError: null };
   ir('asoc');
   await cargarAsoc();
 }
 
 async function cargarAsoc() {
   try {
-    const [sol, ins, ran, ord, ent, rec] = await Promise.all([
+    const [sol, ins, ran, ord, ent, rec, coop] = await Promise.all([
       api.rest('GET', '/solicitudes_insumo?select=id,rancho_id,insumo_id,cantidad,cantidad_asignada,estado,orden_id,creado_en&order=creado_en.desc&limit=1000'),
-      api.rest('GET', '/insumos?select=id,nombre,unidad,activo&order=nombre.asc'),
+      api.rest('GET', '/insumos?select=id,nombre,unidad,activo,estimar_base,estimar_factor&order=nombre.asc'),
       api.rest('GET', '/ranchos?select=id,nombre'),
       api.rest('GET', '/ordenes_consolidadas?select=id,codigo,destinatario_tipo,destinatario,nota,estado,creada_en&order=creada_en.desc&limit=30'),
       api.rest('GET', '/entregas?select=id,orden_id,rancho_id,codigo,estado&order=codigo.asc&limit=500'),
       api.rest('GET', '/orden_recepciones?select=orden_id,insumo_id,cantidad_solicitada,cantidad_recibida&limit=500'),
+      api.rest('GET', `/cooperativas?id=eq.${encodeURIComponent(S.asoc.coop.id)}&select=id,corte_dia,corte_hora`),
     ]);
+    S.asoc.corte = coop && coop[0] ? { dia: coop[0].corte_dia, hora: coop[0].corte_hora } : null;
     Object.assign(S.asoc, { solicitudes: sol || [], insumos: ins || [], ranchos: ran || [], ordenes: ord || [], entregas: ent || [], recepciones: rec || [], error: null });
     const ids = agruparSolicitudes(S.asoc.solicitudes, S.asoc.insumos, S.asoc.ranchos).map((g) => g.insumo_id);
     S.asoc.sel = new Set(S.asoc.sel ? ids.filter((i) => S.asoc.sel.has(i)) : ids);
@@ -741,6 +770,47 @@ function tarjetaOrden(o) {
     ${recepcion}${reparto}</div>`;
 }
 
+function tarjetaCorte() {
+  const A = S.asoc;
+  if (!A.corte) return '';
+  const ahora = new Date();
+  const r = resumenCorte(A.solicitudes, ahora, A.corte.dia, A.corte.hora);
+  const dias = DIAS_SEMANA.map((d, i) => `<option value="${i}" ${A.corte.dia === i ? 'selected' : ''}>${d}</option>`).join('');
+  const horas = Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${A.corte.hora === h ? 'selected' : ''}>${String(h).padStart(2, '0')}:00</option>`).join('');
+  return `<div class="card"><b>Corte semanal</b>
+    <p style="margin:6px 0 0">Próximo corte: <b>${esc(textoCorte(A.corte.dia, A.corte.hora))}</b> · ${esc(textoFalta(ahora, r.proximo))}</p>
+    <p class="suave" style="margin:4px 0 0">Pendientes recibidas después del último corte: ${esc(r.nuevas)}.</p>
+    ${r.rezagadas ? `<div class="aviso warn" style="margin-top:8px">${esc(r.rezagadas)} solicitud(es) pendiente(s) llegaron <b>antes del último corte</b> y siguen sin consolidar.</div>` : ''}
+    <label for="corteDia">Cambiar día y hora del corte</label>
+    <select id="corteDia" class="campo">${dias}</select>
+    <select id="corteHora" class="campo" style="margin-top:8px">${horas}</select>
+    ${A.corteError ? `<div class="aviso mal" style="margin-top:10px">${esc(A.corteError)}</div>` : ''}
+    <button class="btn" style="margin-top:10px" data-accion="corte-guardar">Guardar corte</button></div>`;
+}
+
+async function guardarCorte() {
+  const A = S.asoc;
+  const dia = Number(document.getElementById('corteDia').value), hora = Number(document.getElementById('corteHora').value);
+  try {
+    await api.rest('POST', '/rpc/configurar_corte', { p_coop: A.coop.id, p_dia: dia, p_hora: hora });
+    A.corteError = null;
+    toast('Corte guardado');
+    await cargarAsoc();
+  } catch (e) { A.corteError = msgError(e); render(); }
+}
+
+async function guardarEstimacion(id) {
+  const base = document.getElementById(`eb-${id}`).value;
+  const txt = document.getElementById(`ef-${id}`).value.trim().replace(',', '.');
+  const factor = Number(txt);
+  if (txt === '' || !Number.isFinite(factor) || factor < 0 || factor > 1000) { toast('Escribe una cantidad por vaca entre 0 y 1000.'); return; }
+  try {
+    await api.rest('POST', '/rpc/configurar_estimacion', { p_insumo: id, p_base: base, p_factor: factor });
+    toast('Estimación guardada');
+    await cargarAsoc();
+  } catch (e) { toast(msgError(e)); }
+}
+
 function vistaAsoc() {
   const A = S.asoc;
   if (!A) return vistaInicio();
@@ -750,13 +820,20 @@ function vistaAsoc() {
       <span style="flex:1"><b>${esc(g.nombre)}</b> · ${esc(g.total)} ${esc(g.unidad)}<br><span class="suave">${g.ranchos.map((r) => `${esc(r.rancho)}: ${esc(r.cantidad)}`).join(' · ')}</span></span></label>`).join('');
   const f = A.form;
   const ordenes = A.ordenes.map((o) => tarjetaOrden(o)).join('');
-  const catalogo = A.insumos.map((i) => `<div class="ev"><span>${esc(i.nombre)}</span> <span class="suave">· ${esc(i.unidad)}${i.activo ? '' : ' · inactivo'}</span></div>`).join('');
+  const BASES = { ninguna: 'No estimar', servicio: 'Vacas por servir', diagnostico: 'Vacas por diagnosticar' };
+  const catalogo = A.insumos.map((i) => `<div class="ev"><span>${esc(i.nombre)}</span> <span class="suave">· ${esc(i.unidad)}${i.activo ? '' : ' · inactivo'}</span>
+      <label for="eb-${esc(i.id)}" style="margin-top:6px">Estimar por rancho (opcional)</label>
+      <select id="eb-${esc(i.id)}" class="campo">${Object.entries(BASES).map(([k, v]) => `<option value="${k}" ${(i.estimar_base || 'ninguna') === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+      <label for="ef-${esc(i.id)}">Cantidad por vaca</label>
+      <input id="ef-${esc(i.id)}" type="text" inputmode="decimal" value="${esc(i.estimar_factor ?? 0)}">
+      <button class="btn chico" style="margin-top:6px" data-accion="est-guardar" data-id="${esc(i.id)}">Guardar estimación</button></div>`).join('');
   return marco(`
     <button class="atras" data-accion="ir" data-vista="inicio">‹ Inicio</button>
     <h2>Panel de la asociación</h2>
     <p class="suave">${esc(A.coop ? A.coop.nombre : '')}. Aquí ves lo que piden los ranchos para comprar en conjunto. No ves sus vacas ni sus registros. Necesita internet.</p>
     ${A.error ? `<div class="aviso mal">${esc(A.error)}</div>` : ''}
     ${A.cargando ? '<p class="suave">Cargando…</p>' : `
+    ${tarjetaCorte()}
     <div class="card"><b>Demanda pendiente</b>${demanda || '<p class="suave">No hay solicitudes pendientes.</p>'}</div>
     ${grupos.length ? `<div class="card"><b>Crear compra consolidada</b>
       <p class="suave" style="margin:4px 0 0">Incluye los insumos marcados arriba.</p>
@@ -903,6 +980,9 @@ $app.addEventListener('click', async (ev) => {
     case 'abrir-asoc': await abrirAsoc(); break;
     case 'asoc-consolidar': await consolidar(); break;
     case 'orden-estado': await cambiarEstadoOrden(el.dataset.id, el.dataset.estado); break;
+    case 'sug-usar': document.getElementById('insumo').value = el.dataset.id; document.getElementById('cantidad').value = el.dataset.cant; document.getElementById('nota').value = ''; S.ped.formError = null; render(); document.getElementById('cantidad').scrollIntoView({ block: 'center' }); break;
+    case 'corte-guardar': await guardarCorte(); break;
+    case 'est-guardar': await guardarEstimacion(el.dataset.id); break;
     case 'orden-copiar': await copiarOrden(el.dataset.id); break;
     case 'orden-recibir': abrirRecepcion(el.dataset.id); break;
     case 'recep-confirmar': await confirmarRecepcion(el.dataset.id); break;

@@ -97,3 +97,13 @@ Se ajustan en `UMBRALES` y `PARAMS` de `lib.js`.
 - **Entrega**: el admin marca "Entregada" (`marcar_entrega`); el rancho (dueño o MVZ) ve su código y "Confirmar que lo recibí" (`confirmar_entrega`). Cada rancho solo ve sus entregas.
 - Una compra solo pasa de borrador a enviada por PATCH; *recibida* solo por `recibir_orden`.
 - Pendiente: cancelar una compra consolidada (no libera las solicitudes).
+
+## Corte semanal y necesidad estimada
+
+- **Corte**: la cooperativa define día y hora (por defecto miércoles 18:00, solo un valor inicial) en Panel de la asociación → "Corte semanal" (RPC `configurar_corte`, solo admin). Se calcula con la hora del dispositivo.
+- **Rancho**: ve "Corte semanal: … · faltan N" al pedir insumos. Lo pedido antes entra a la compra de la semana; después, a la siguiente.
+- **Admin**: ve el próximo corte y cuántas solicitudes pendientes llegaron *antes del último corte* y siguen sin consolidar. La consolidación sigue siendo manual y revisada; nada se compra solo.
+- **Sugerencia semanal**: por insumo, el admin elige la base ("Vacas por servir" o "Vacas por diagnosticar") y la cantidad por vaca (RPC `configurar_estimacion`). El rancho ve `ceil(vacas × factor)` para los próximos 7 días, descuenta lo ya pedido y el botón "Pedir N" solo precarga el formulario.
+  - Por servir: vacas en celo, abiertas, listas, o posparto que estarán listas en ≤ 7 días (cota superior: no todas se servirán).
+  - Por diagnosticar: vacas que ya tocan diagnóstico o lo cumplirán en ≤ 7 días.
+- **Límites**: los factores NO están validados (los fija el MVZ/cooperativa; por defecto 0 = no sugiere). Solo cubre insumos ligados a eventos reproductivos. Si el rancho no registra, la estimación sale baja (la app lo avisa si el último dato tiene más de 14 días). Un solo corte para toda la cooperativa. Sin aviso por WhatsApp (depende del canal).

@@ -38,7 +38,7 @@ export class MockSupabase {
 
   crearRancho({ cooperativa = 'Coop Sintética', socio = 'Socio', rancho = 'Rancho' }) {
     let c = this.cooperativas.find((x) => x.nombre === cooperativa);
-    if (!c) { c = { id: crypto.randomUUID(), nombre: cooperativa }; this.cooperativas.push(c); }
+    if (!c) { c = { id: crypto.randomUUID(), nombre: cooperativa, corte_dia: 3, corte_hora: 18 }; this.cooperativas.push(c); }
     const s = { id: crypto.randomUUID(), cooperativa_id: c.id, nombre: socio };
     this.socios.push(s);
     const r = { id: crypto.randomUUID(), socio_id: s.id, nombre: rancho };
@@ -55,9 +55,9 @@ export class MockSupabase {
     this.admins.push({ user_id: user.id, cooperativa_id: c.id });
   }
 
-  crearInsumo(cooperativaNombre, nombre, unidad) {
+  crearInsumo(cooperativaNombre, nombre, unidad, estimar = {}) {
     const c = this.cooperativas.find((x) => x.nombre === cooperativaNombre);
-    const i = { id: crypto.randomUUID(), cooperativa_id: c.id, nombre, unidad, activo: true };
+    const i = { id: crypto.randomUUID(), cooperativa_id: c.id, nombre, unidad, activo: true, estimar_base: estimar.base || 'ninguna', estimar_factor: estimar.factor || 0 };
     this.insumos.push(i);
     return i;
   }
@@ -86,6 +86,7 @@ export class MockSupabase {
     }
     const ra = this._ranchosAdmin(uid);
     if (tabla === 'insumos') { const cs = this._coopsVisibles(uid, mis); filas = this.insumos.filter((i) => cs.has(i.cooperativa_id)); }
+    else if (tabla === 'cooperativas') { const cs = this._coopsVisibles(uid, mis); filas = this.cooperativas.filter((c) => cs.has(c.id)); }
     else if (tabla === 'ranchos') filas = this.ranchos.filter((r) => mis.has(r.id) || ra.has(r.id)).map((r) => ({ id: r.id, nombre: r.nombre }));
     else if (tabla === 'ordenes_consolidadas') { const cs = this._coopsAdmin(uid); filas = this.ordenes.filter((o) => cs.has(o.cooperativa_id)); }
     else if (tabla === 'solicitudes_insumo') {
@@ -118,7 +119,7 @@ export class MockSupabase {
     if (tabla === 'insumos') {
       if (!this._coopsAdmin(uid).has(body.cooperativa_id)) return this._json(403, { code: '42501', message: 'new row violates row-level security policy for table "insumos"' });
       if (this.insumos.some((i) => i.cooperativa_id === body.cooperativa_id && i.nombre === body.nombre)) return this._json(409, { code: '23505', message: 'duplicate key' });
-      this.insumos.push({ id: crypto.randomUUID(), cooperativa_id: body.cooperativa_id, nombre: body.nombre, unidad: body.unidad, activo: true });
+      this.insumos.push({ id: crypto.randomUUID(), cooperativa_id: body.cooperativa_id, nombre: body.nombre, unidad: body.unidad, activo: true, estimar_base: 'ninguna', estimar_factor: 0 });
       return { status: 201, body: '' };
     }
     if (tabla === 'rpc/consolidar_solicitudes') {
@@ -131,6 +132,19 @@ export class MockSupabase {
       const ranchosOrden = [...new Set(objetivo.map((s) => s.rancho_id))].map((id) => this.ranchos.find((r) => r.id === id)).sort((a, b) => a.nombre.localeCompare(b.nombre));
       ranchosOrden.forEach((r, i) => this.entregas.push({ id: crypto.randomUUID(), orden_id: o.id, rancho_id: r.id, codigo: `${o.codigo}-${String(i + 1).padStart(2, '0')}`, estado: 'por_entregar' }));
       return this._json(200, o.id);
+    }
+    if (tabla === 'rpc/configurar_corte') {
+      if (!this._coopsAdmin(uid).has(body.p_coop)) return this._json(403, { code: '42501', message: 'No eres administrador de esta cooperativa' });
+      if (![0, 1, 2, 3, 4, 5, 6].includes(body.p_dia) || !Number.isInteger(body.p_hora) || body.p_hora < 0 || body.p_hora > 23) return this._json(400, { code: 'P0001', message: 'Día u hora de corte inválidos' });
+      const c = this.cooperativas.find((x) => x.id === body.p_coop); c.corte_dia = body.p_dia; c.corte_hora = body.p_hora;
+      return { status: 204, body: '' };
+    }
+    if (tabla === 'rpc/configurar_estimacion') {
+      const i = this.insumos.find((x) => x.id === body.p_insumo);
+      if (!i || !this._coopsAdmin(uid).has(i.cooperativa_id)) return this._json(403, { code: '42501', message: 'No eres administrador de esta cooperativa' });
+      if (!['ninguna', 'servicio', 'diagnostico'].includes(body.p_base) || typeof body.p_factor !== 'number' || body.p_factor < 0 || body.p_factor > 1000) return this._json(400, { code: 'P0001', message: 'Base o factor de estimación inválidos' });
+      i.estimar_base = body.p_base; i.estimar_factor = body.p_factor;
+      return { status: 204, body: '' };
     }
     if (tabla === 'rpc/recibir_orden') {
       const o = this.ordenes.find((x) => x.id === body.p_orden);
